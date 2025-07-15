@@ -1,0 +1,108 @@
+import PyPDF2
+import io
+from typing import Tuple, List
+from fastapi import HTTPException
+from config import Config
+
+class PDFProcessor:
+    """Process PDF files"""
+    
+    def __init__(self):
+        self.config = Config()
+    
+    def validate_file(self, filename: str, file_content: bytes) -> None:
+        """Checking PDF file integrity"""
+        if not filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400,
+                detail="The file extension must be PDF."
+            )
+        
+        file_size = len(file_content)
+        if file_size > self.config.MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Max size: {self.config.MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        if file_size == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="File is empty"
+            )
+    
+    def extract_text_from_pdf(self, file_content: bytes) -> Tuple[str, int]:
+        """Extract text from PDF"""
+        try:
+            pdf_file = io.BytesIO(file_content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            num_pages = len(pdf_reader.pages)
+            if num_pages == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="PDF contains no pages"
+                )
+            
+            if pdf_reader.is_encrypted:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password protected PDF not supported"
+                )
+            
+            full_text = ""
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    full_text += page_text + "\n"
+            
+            if not full_text.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="PDF contains no extractable text"
+                )
+            
+            return full_text, num_pages
+            
+        except PyPDF2.errors.PdfReadError:
+            raise HTTPException(
+                status_code=400,
+                detail="PDF file is corrupt or invalid"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing PDF: {str(e)}"
+            )
+    
+    def split_text_into_chunks(self, text) -> List[str]:
+        """Dividing text into parts"""
+        if isinstance(text, list):
+            text = " ".join(str(item) for item in text)
+        elif text is None:
+            text = ""
+        elif not isinstance(text, str):
+            text = str(text)
+        
+        words = text.split()
+        chunks = []
+        
+        for i in range(0, len(words), self.config.CHUNK_SIZE - self.config.CHUNK_OVERLAP):
+            chunk = " ".join(words[i:i + self.config.CHUNK_SIZE])
+            if chunk.strip():
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def get_file_info(self, filename: str, file_content: bytes) -> dict:
+        """Getting information about the file"""
+        full_text, num_pages = self.extract_text_from_pdf(file_content)
+        
+        return {
+            "filename": filename,
+            "size_bytes": len(file_content),
+            "size_mb": round(len(file_content) / (1024*1024), 2),
+            "num_pages": num_pages,
+            "has_text": True,
+            "extracted_text": full_text[:500] 
+        }
