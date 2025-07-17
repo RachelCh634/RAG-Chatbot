@@ -10,3 +10,7 @@ pytest
 httpx
 python-multipart
 sentence_transformers
+openai
+langchain
+langchain-openai
+langchain-community

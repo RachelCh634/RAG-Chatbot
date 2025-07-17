@@ -93,16 +93,3 @@ class PDFProcessor:
                 chunks.append(chunk)
         
         return chunks
-    
-    def get_file_info(self, filename: str, file_content: bytes) -> dict:
-        """Getting information about the file"""
-        full_text, num_pages = self.extract_text_from_pdf(file_content)
-        
-        return {
-            "filename": filename,
-            "size_bytes": len(file_content),
-            "size_mb": round(len(file_content) / (1024*1024), 2),
-            "num_pages": num_pages,
-            "has_text": True,
-            "extracted_text": full_text[:500] 
-        }

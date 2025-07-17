@@ -1,96 +1,164 @@
-from openai import OpenAI
-from typing import List, Dict, Any
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStore
+from langchain_core.output_parsers import StrOutputParser
+from typing import List, Dict, Optional
 from config import Config
 
+class LangChainVectorStore(VectorStore):
+    """Custom VectorStore wrapper for our VectorService"""
+    
+    def __init__(self, vector_service):
+        self.vector_service = vector_service
+    
+    def similarity_search(self, query: str, k: int = 4) -> List[Document]:
+        results = self.vector_service.search_vectors(query, k)
+        documents = []
+        for result in results:
+            doc = Document(
+                page_content=result['text'],
+                metadata={
+                    'filename': result['filename'],
+                    'chunk_index': result['chunk_index'],
+                    'score': result['score']
+                }
+            )
+            documents.append(doc)
+        return documents
+    
+    @classmethod
+    def from_texts(cls, texts: List[str], metadatas: Optional[List[dict]] = None, **kwargs) -> "LangChainVectorStore":
+        pass  
+
+    def add_texts(self, texts: List[str], metadatas: Optional[List[dict]] = None, **kwargs) -> List[str]:
+        pass
+
 class AIService:
-    """AI service for generating answers"""
-    
-    def __init__(self):
+    def __init__(self, vector_service=None):
         self.config = Config()
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=self.config.OPENROUTER_API_KEY
+        
+        self.llm = ChatOpenAI(
+            openai_api_key=self.config.OPENROUTER_API_KEY,
+            openai_api_base="https://openrouter.ai/api/v1",
+            model="qwen/qwen-2.5-72b-instruct",  
+            temperature=self.config.TEMPERATURE,
+            max_tokens=self.config.MAX_TOKENS,
         )
+        
+        self.vector_service = vector_service
+        if vector_service:
+            self.vector_store = LangChainVectorStore(vector_service)
+        else:
+            self.vector_store = None
+        
+        self.conversation_history = []
+        
+        self._setup_chains()
     
-    def generate_answer_from_context(self, query: str, context_chunks: List[str]) -> str:
-        context = "\n\n".join(context_chunks[:self.config.MAX_CONTEXT_CHUNKS])
-        prompt = f"""Based on the following context from a PDF document, answer the user's question clearly and concisely.
+    def _setup_chains(self):
+        self.qa_template = """You are a helpful assistant specialized in construction and architectural documents.
+Use the following context to answer the question accurately and concisely.
 
 Context:
 {context}
 
-Question: {query}
+Question: {question}
 
 Instructions:
-- Give a direct, short answer (2-3 sentences maximum)
+- Give a direct, clear answer (2-3 sentences maximum)
 - Only use information from the provided context
-- If the context doesn't contain the answer, say "I don't have enough information to answer this question"
-- Be specific and factual
-- Answer in the same language as the question
+- Be specific about doors, windows, measurements, and costs
+- If you don't know the answer from the context, say so clearly
+- Use simple punctuation and avoid special characters like ** or \n
 
 Answer:"""
+        
+        self.qa_prompt = PromptTemplate(
+            input_variables=["context", "question"],
+            template=self.qa_template
+        )
+        
+        self.qa_chain = self.qa_prompt | self.llm | StrOutputParser()
+        
+        self.conversation_template = """You are a helpful assistant specialized in construction and architectural documents.
+You help users understand door and window schedules, calculate areas, and provide cost estimates.
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.AI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that answers questions based on provided context. Give short, direct answers."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=self.config.MAX_TOKENS,
-                temperature=self.config.TEMPERATURE,
-                top_p=self.config.TOP_P
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            print(f"AI Error: {e}")
-            return f"Based on the document: {context_chunks[0][:150]}..."
-    
-    def chat_with_context(self, query: str, context: str, conversation_history: List[Dict[str, str]] = None) -> str:
-        """Chat with context and history"""
-        
-        if conversation_history is None:
-            conversation_history = []
-        
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant answering questions about documents. Give short, direct answers."}
-        ]
-        
-        for msg in conversation_history[-self.config.CONVERSATION_HISTORY_LIMIT:]:
-            messages.append({"role": "user", "content": msg.get("question", "")})
-            messages.append({"role": "assistant", "content": msg.get("answer", "")})
-        
-        current_prompt = f"""Based on this context from the document:
+Previous conversation:
+{chat_history}
 
+Context from document:
 {context}
 
-Question: {query}
-
-Give a short, direct answer (1-2 sentences)."""
-
-        messages.append({"role": "user", "content": current_prompt})
+Human: {input}
+Assistant:"""
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.AI_MODEL,
-                messages=messages,
-                max_tokens=150,
-                temperature=0.3
-            )
-            
-            return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            print(f"Chat AI Error: {e}")
-            return "I'm having trouble generating a response right now."
+        self.conversation_prompt = PromptTemplate(
+            input_variables=["chat_history", "context", "input"],
+            template=self.conversation_template
+        )
+        
+        self.conversation_chain = self.conversation_prompt | self.llm | StrOutputParser()
     
-    def determine_confidence(self, best_score: float) -> str:
-        """Determining the level of confidence in the answer"""
-        if best_score > 0.7:
-            return "high"
-        elif best_score > 0.3:
-            return "medium"
-        else:
-            return "low"
+    def generate_answer_from_context(self, query: str, context_chunks: List[str]) -> str:
+        """Generate answer from context chunks using Qwen model"""
+        try:
+            context = "\n\n".join(context_chunks[:self.config.MAX_CONTEXT_CHUNKS])
+            
+            response = self.qa_chain.invoke({
+                "context": context,
+                "question": query
+            })
+            
+            return response.strip()
+        except Exception as e:
+            print(f"Qwen QA Error: {e}")
+            return "I encountered an error while processing your question. Please try again." 
+
+    def chat_with_context(self, query: str, context: str = None) -> str:
+        """Chat with context using Qwen model with vector search"""
+        try:
+            chat_history = ""
+            for entry in self.conversation_history[-4:]: 
+                chat_history += f"Human: {entry['question']}\nAssistant: {entry['answer']}\n\n"
+            
+            retrieved_context = ""
+            if self.vector_store:
+                try:
+                    relevant_docs = self.vector_store.similarity_search(query, k=4)
+                    retrieved_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+                except Exception as e:
+                    print(f"Error retrieving context: {e}")
+            
+            combined_context = ""
+            if context:
+                combined_context += context
+            if retrieved_context:
+                if combined_context:
+                    combined_context += "\n\n" + retrieved_context
+                else:
+                    combined_context = retrieved_context
+            
+            response = self.conversation_chain.invoke({
+                "chat_history": chat_history,
+                "context": combined_context,
+                "input": query
+            })
+            
+            self.conversation_history.append({
+                "question": query,
+                "answer": response
+            })
+            
+            return response.strip()
+        except Exception as e:
+            print(f"Qwen Chat Error: {e}")
+            return "I'm having trouble generating a response right now."
+
+    def clear_memory(self):
+        """Clear conversation memory"""
+        self.conversation_history = []
+    
+    def get_conversation_history(self) -> List[Dict[str, str]]:
+        """Get formatted conversation history"""
+        return self.conversation_history.copy()

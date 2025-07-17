@@ -81,25 +81,21 @@ class VectorService:
     
     def store_vectors(self, filename: str, full_text: str, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """Store vectors with Pinecone fallback to JSON"""
-        print(f"📄 Processing: {filename}")
+        print(f"Processing: {filename}")
         
-        # Split text into chunks
         chunks = self.split_text_into_chunks(full_text)
         print(f"Created {len(chunks)} chunks")
         
-        # Create embeddings
         embeddings = self.create_embeddings(chunks)
         print(f"Created {len(embeddings)} embeddings")
         
-        # Try Pinecone first
         if self.pinecone_available:
             try:
                 return self._store_vectors_pinecone(filename, chunks, embeddings, metadata)
             except Exception as e:
-                print(f"❌ Pinecone storage failed: {e}")
+                print(f"Pinecone storage failed: {e}")
                 print("Falling back to JSON storage...")
         
-        # Fallback to JSON
         return self._store_vectors_json(filename, chunks, embeddings, metadata)
     
     def _store_vectors_pinecone(self, filename: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -186,7 +182,6 @@ class VectorService:
         """Search vectors with Pinecone fallback to JSON"""
         print(f"Searching for: '{query}'")
         
-        # Try Pinecone first
         if self.pinecone_available:
             try:
                 return self._search_pinecone(query, top_k)
@@ -194,7 +189,6 @@ class VectorService:
                 print(f"Pinecone search failed: {e}")
                 print("Falling back to JSON search...")
         
-        # Fallback to JSON
         return self._search_json_vectors(query, top_k)
     
     def _search_pinecone(self, query: str, top_k: int) -> List[Dict[str, Any]]:
@@ -287,53 +281,25 @@ class VectorService:
             print(f"Failed to load JSON: {e}")
             return []
     
-    def get_status(self) -> Dict[str, Any]:
-        """Get current system status"""
-        backup_file = self._find_latest_backup_file()
-        
-        status = {
-            "pinecone_available": self.pinecone_available,
-            "backup_file_exists": backup_file is not None,
-            "backup_file": backup_file,
-            "primary_storage": "pinecone" if self.pinecone_available else "json_local",
-            "embedding_model": "all-MiniLM-L6-v2",
-            "embedding_dimension": self.dimension
-        }
-        
-        if backup_file:
-            vectors = self._load_vectors_from_json(backup_file)
-            status["vectors_count"] = len(vectors)
-            
-        if self.pinecone_available:
-            try:
-                index_stats = self.index.describe_index_stats()
-                status["pinecone_vectors_count"] = index_stats.get("total_vector_count", 0)
-            except:
-                pass
-        
-        return status
-    
     def clear_all_vectors(self):
         """Clear all vectors from both Pinecone and JSON files"""
         print("Clearing all vectors...")
         
-        # Clear Pinecone
         if self.pinecone_available:
             try:
                 self.index.delete(delete_all=True)
-                print("✅ Pinecone vectors cleared")
+                print("Pinecone vectors cleared")
             except Exception as e:
-                print(f"❌ Failed to clear Pinecone: {e}")
+                print(f"Failed to clear Pinecone: {e}")
         
-        # Clear JSON files
         backup_files = [f for f in os.listdir('.') 
         if f.startswith('vectors_backup_') and f.endswith('.json')]
         
         for file in backup_files:
             try:
                 os.remove(file)
-                print(f"✅ Removed {file}")
+                print(f"Removed {file}")
             except Exception as e:
-                print(f"❌ Failed to remove {file}: {e}")
+                print(f"Failed to remove {file}: {e}")
         
         print("All vectors cleared!")
