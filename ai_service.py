@@ -99,21 +99,6 @@ Assistant:"""
         )
         
         self.conversation_chain = self.conversation_prompt | self.llm | StrOutputParser()
-    
-    def generate_answer_from_context(self, query: str, context_chunks: List[str]) -> str:
-        """Generate answer from context chunks using Qwen model"""
-        try:
-            context = "\n\n".join(context_chunks[:self.config.MAX_CONTEXT_CHUNKS])
-            
-            response = self.qa_chain.invoke({
-                "context": context,
-                "question": query
-            })
-            
-            return response.strip()
-        except Exception as e:
-            print(f"Qwen QA Error: {e}")
-            return "I encountered an error while processing your question. Please try again." 
 
     def chat_with_context(self, query: str, context: str = None) -> str:
         """Chat with context using Qwen model with vector search"""

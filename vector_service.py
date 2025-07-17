@@ -4,20 +4,22 @@ import time
 import uuid
 from typing import List, Dict, Any, Optional
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
+import re
+import numpy as np
 
 load_dotenv()
 
 class VectorService:
-    """Unified Vector Management Service with Pinecone and JSON fallback"""
+    """Optimized Vector Management Service with Pinecone and JSON fallback"""
     
     def __init__(self):
-        # Initialize embedding model
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.embedding_model.max_seq_length = 256  
         self.dimension = 384
         
-        # Try to initialize Pinecone
+        self.embedding_cache = {}
+        
         self.pinecone_available = False
         self.pc = None
         self.index = None
@@ -26,7 +28,7 @@ class VectorService:
         self._setup_pinecone()
     
     def _setup_pinecone(self):
-        """Setup Pinecone connection"""
+        """Setup Pinecone connection with improved initialization"""
         try:
             from pinecone import Pinecone, ServerlessSpec
             
@@ -37,7 +39,6 @@ class VectorService:
             
             self.pc = Pinecone(api_key=api_key)
             
-            # Check if index exists, create if not
             existing_indexes = [index.name for index in self.pc.list_indexes()]
             
             if self.index_name not in existing_indexes:
@@ -51,8 +52,12 @@ class VectorService:
                         region="us-east-1"
                     )
                 )
+                
                 print("Waiting for index to be ready...")
-                time.sleep(10)
+                while not self.pc.describe_index(self.index_name).status['ready']:
+                    print("Index not ready yet, waiting...")
+                    time.sleep(5)
+                print("Index is ready!")
             
             self.index = self.pc.Index(self.index_name)
             self.pinecone_available = True
@@ -62,22 +67,60 @@ class VectorService:
             print(f"Pinecone unavailable: {e}")
             print("Will use JSON fallback for storage")
     
-    def split_text_into_chunks(self, text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-        """Split text into overlapping chunks"""
+    def preprocess_text(self, text: str) -> str:
+        """Lightweight preprocessing"""
+        text = re.sub(r'\s+', ' ', text.strip())
+        return text
+    
+    def split_text_into_chunks(self, text: str, chunk_size: int = 300, overlap: int = 50) -> List[str]:
+        """Faster chunking with simpler logic"""
         words = text.split()
         chunks = []
         
         for i in range(0, len(words), chunk_size - overlap):
             chunk = " ".join(words[i:i + chunk_size])
             if chunk.strip():
-                chunks.append(chunk)
+                chunks.append(chunk.strip())
         
         return chunks
     
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Create embeddings for texts"""
-        embeddings = self.embedding_model.encode(texts)
-        return embeddings.tolist()
+        """Optimized embedding creation with caching"""
+        embeddings = []
+        texts_to_encode = []
+        cache_indices = []
+        
+        for i, text in enumerate(texts):
+            if text in self.embedding_cache:
+                embeddings.append(self.embedding_cache[text])
+                cache_indices.append(i)
+            else:
+                texts_to_encode.append(text)
+        
+        if texts_to_encode:
+            batch_size = 10
+            new_embeddings = []
+            
+            for i in range(0, len(texts_to_encode), batch_size):
+                batch = texts_to_encode[i:i + batch_size]
+                batch_embeddings = self.embedding_model.encode(
+                    batch,
+                    batch_size=batch_size,
+                    show_progress_bar=False,
+                    convert_to_numpy=True
+                )
+                new_embeddings.extend(batch_embeddings)
+            
+            for text, embedding in zip(texts_to_encode, new_embeddings):
+                self.embedding_cache[text] = embedding.tolist()
+            
+            text_idx = 0
+            for i, text in enumerate(texts):
+                if i not in cache_indices:
+                    embeddings.insert(i, new_embeddings[text_idx].tolist())
+                    text_idx += 1
+        
+        return embeddings
     
     def store_vectors(self, filename: str, full_text: str, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """Store vectors with Pinecone fallback to JSON"""
@@ -99,7 +142,7 @@ class VectorService:
         return self._store_vectors_json(filename, chunks, embeddings, metadata)
     
     def _store_vectors_pinecone(self, filename: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Store vectors in Pinecone"""
+        """Store vectors in Pinecone with consistency checking"""
         vectors_to_upsert = []
         
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -120,18 +163,48 @@ class VectorService:
             })
         
         print(f"Uploading {len(vectors_to_upsert)} vectors to Pinecone...")
-        self.index.upsert(vectors=vectors_to_upsert)
         
-        print(f"Stored {len(vectors_to_upsert)} vectors in Pinecone")
+        batch_size = 100
+        for i in range(0, len(vectors_to_upsert), batch_size):
+            batch = vectors_to_upsert[i:i + batch_size]
+            self.index.upsert(vectors=batch)
+        
+        print(f"Uploaded {len(vectors_to_upsert)} vectors to Pinecone")
+        
+        self._wait_for_consistency(expected_count=len(vectors_to_upsert))
         
         return {
             "status": "success",
-            "message": "PDF processed and stored in Pinecone",
+            "message": "PDF processed and stored in Pinecone (synced)",
             "filename": filename,
             "chunks_stored": len(chunks),
             "total_vectors": len(vectors_to_upsert),
             "storage_method": "pinecone"
         }
+    
+    def _wait_for_consistency(self, expected_count: int, max_wait: int = 30):
+        """Wait for Pinecone to sync the vectors"""
+        print("Waiting for Pinecone consistency...")
+        
+        for attempt in range(max_wait):
+            try:
+                stats = self.index.describe_index_stats()
+                current_count = stats.get('total_vector_count', 0)
+                
+                print(f"Attempt {attempt + 1}: {current_count} vectors in index")
+                
+                if current_count >= expected_count:
+                    print("Pinecone synced successfully!")
+                    return True
+                    
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"Consistency check failed: {e}")
+                time.sleep(1)
+        
+        print("Consistency check timed out, but vectors might still be syncing")
+        return False
     
     def _store_vectors_json(self, filename: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """Store vectors in JSON file"""
@@ -178,22 +251,53 @@ class VectorService:
             "backup_file": backup_file
         }
     
-    def search_vectors(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search vectors with Pinecone fallback to JSON"""
+    def search_vectors(self, query: str, top_k: int = 5, max_retries: int = 3) -> List[Dict[str, Any]]:
+        """Search with retry logic for consistency issues"""
         print(f"Searching for: '{query}'")
         
         if self.pinecone_available:
-            try:
-                return self._search_pinecone(query, top_k)
-            except Exception as e:
-                print(f"Pinecone search failed: {e}")
-                print("Falling back to JSON search...")
+            for attempt in range(max_retries):
+                try:
+                    results = self._search_pinecone(query, top_k)
+                    
+                    if results or attempt == max_retries - 1:
+                        return results
+                    
+                    # If no results found, retry after short wait
+                    print(f"No results on attempt {attempt + 1}, retrying...")
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    print(f"Pinecone search failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_retries - 1:
+                        print("Falling back to JSON search...")
+                        return self._search_json_vectors(query, top_k)
         
         return self._search_json_vectors(query, top_k)
     
     def _search_pinecone(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """Search vectors in Pinecone"""
-        query_embedding = self.embedding_model.encode([query])[0].tolist()
+        """Search vectors in Pinecone with consistency check"""
+        
+        # Quick index status check
+        try:
+            stats = self.index.describe_index_stats()
+            vector_count = stats.get('total_vector_count', 0)
+            
+            if vector_count == 0:
+                print("Index appears empty, might be consistency issue")
+                return []
+                
+            print(f"Index contains {vector_count} vectors")
+            
+        except Exception as e:
+            print(f"Could not check index stats: {e}")
+        
+        # Continue with regular search
+        if query in self.embedding_cache:
+            query_embedding = self.embedding_cache[query]
+        else:
+            query_embedding = self.embedding_model.encode([query])[0].tolist()
+            self.embedding_cache[query] = query_embedding
         
         results = self.index.query(
             vector=query_embedding,
@@ -202,7 +306,7 @@ class VectorService:
         )
         
         processed_results = []
-        for match in results["matches"]:
+        for match in results.get("matches", []):
             result = {
                 "id": match["id"],
                 "score": match["score"],
@@ -216,39 +320,41 @@ class VectorService:
         return processed_results
     
     def _search_json_vectors(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """Search vectors in JSON files"""
+        """Optimized JSON search with numpy"""
         try:
             backup_file = self._find_latest_backup_file()
             if not backup_file:
                 print("No backup files found")
                 return []
             
-            print(f"Searching in local file: {backup_file}")
-            
             vectors = self._load_vectors_from_json(backup_file)
             if not vectors:
                 return []
             
-            query_embedding = self.embedding_model.encode([query])[0]
+            if query in self.embedding_cache:
+                query_embedding = self.embedding_cache[query]
+            else:
+                query_embedding = self.embedding_model.encode([query])[0].tolist()
+                self.embedding_cache[query] = query_embedding
             
-            similarities = []
-            for vector_data in vectors:
-                vector_embedding = vector_data['values']
-                similarity = cosine_similarity(
-                    [query_embedding], 
-                    [vector_embedding]
-                )[0][0]
-                
-                similarities.append({
-                    'id': vector_data['id'],
-                    'score': float(similarity),
-                    'text': vector_data['metadata']['text'],
-                    'filename': vector_data['metadata']['filename'],
-                    'chunk_index': vector_data['metadata']['chunk_index']
+            query_vec = np.array(query_embedding)
+            vector_embeddings = np.array([v['values'] for v in vectors])
+            
+            similarities = np.dot(vector_embeddings, query_vec) / (
+                np.linalg.norm(vector_embeddings, axis=1) * np.linalg.norm(query_vec)
+            )
+            
+            top_indices = np.argsort(similarities)[-top_k:][::-1]
+            
+            results = []
+            for idx in top_indices:
+                results.append({
+                    'id': vectors[idx]['id'],
+                    'score': float(similarities[idx]),
+                    'text': vectors[idx]['metadata']['text'],
+                    'filename': vectors[idx]['metadata']['filename'],
+                    'chunk_index': vectors[idx]['metadata']['chunk_index']
                 })
-            
-            similarities.sort(key=lambda x: x['score'], reverse=True)
-            results = similarities[:top_k]
             
             print(f"Found {len(results)} matches in JSON")
             return results
@@ -281,6 +387,11 @@ class VectorService:
             print(f"Failed to load JSON: {e}")
             return []
     
+    def clear_cache(self):
+        """Clear embedding cache"""
+        self.embedding_cache.clear()
+        print("Embedding cache cleared")
+    
     def clear_all_vectors(self):
         """Clear all vectors from both Pinecone and JSON files"""
         print("Clearing all vectors...")
@@ -302,4 +413,5 @@ class VectorService:
             except Exception as e:
                 print(f"Failed to remove {file}: {e}")
         
+        self.clear_cache()
         print("All vectors cleared!")

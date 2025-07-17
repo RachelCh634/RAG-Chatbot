@@ -74,22 +74,3 @@ class PDFProcessor:
                 status_code=500,
                 detail=f"Error processing PDF: {str(e)}"
             )
-    
-    def split_text_into_chunks(self, text) -> List[str]:
-        """Dividing text into parts"""
-        if isinstance(text, list):
-            text = " ".join(str(item) for item in text)
-        elif text is None:
-            text = ""
-        elif not isinstance(text, str):
-            text = str(text)
-        
-        words = text.split()
-        chunks = []
-        
-        for i in range(0, len(words), self.config.CHUNK_SIZE - self.config.CHUNK_OVERLAP):
-            chunk = " ".join(words[i:i + self.config.CHUNK_SIZE])
-            if chunk.strip():
-                chunks.append(chunk)
-        
-        return chunks
