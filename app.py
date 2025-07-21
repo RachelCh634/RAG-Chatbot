@@ -2,6 +2,18 @@ import streamlit as st
 from datetime import datetime
 import PyPDF2
 from io import BytesIO
+import requests
+
+def get_bot_response_from_api(user_message):
+    api_url = "http://localhost:8000/chat"
+    try:
+        payload = {"query": user_message}
+        response = requests.post(api_url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        return result.get("answer", "⚠️ No answer returned.")
+    except Exception as e:
+        return f"❌ API error: {str(e)}"
 
 def configure_page():
     st.set_page_config(
@@ -190,6 +202,35 @@ def render_sidebar():
             st.session_state.input_key += 1
             st.rerun()
         
+        if st.button("🧠 Clear Memory"):
+            result = clear_memory_api()
+            st.success(result)
+
+        if st.button("🧹 Clear All Vectors"):
+            result = clear_all_vectors_api()
+            st.success(result)
+
+        if st.button("📜 Show History"):
+            response = get_conversation_history_api()
+            if response.get("status") == "success" and "history" in response:
+                history = response["history"]
+                if history:
+                    st.markdown("### 🧾 Server-side History:")
+                    for item in history:
+                        user = item.get('user', 'N/A')
+                        bot = item.get('bot', 'N/A')
+                        st.markdown(f"- **User:** {user}")
+                        st.markdown(f"  **Bot:** {bot}")
+                        st.markdown("---")
+                else:
+                    st.info("No history found.")
+            else:
+                st.error("Failed to fetch history from server.")
+
+        if st.button("🔴 Reset Everything"):
+            reset_everything()
+            st.rerun()
+
         if st.session_state.pdf_uploaded:
             if st.button("📄 Upload New PDF"):
                 st.session_state.pdf_uploaded = False
@@ -215,25 +256,29 @@ def handle_pdf_upload():
     )
     
     if uploaded_file is not None:
-        with st.spinner("📖 Processing PDF..."):
-            pdf_text = extract_pdf_text(uploaded_file)
-            
-            if pdf_text:
-                st.session_state.pdf_content = pdf_text
-                st.session_state.pdf_filename = uploaded_file.name
+        with st.spinner("📤 Uploading PDF to server..."):
+            try:
+                files = {'file': (uploaded_file.name, uploaded_file, "application/pdf")}
+                response = requests.post("http://localhost:8000/upload-pdf", files=files)
+                response.raise_for_status()
+                data = response.json()
+
                 st.session_state.pdf_uploaded = True
-                
+                st.session_state.pdf_filename = data.get("filename", uploaded_file.name)
+                st.session_state.pdf_content = "Uploaded to vector DB ✅"
+
                 st.success(f"PDF '{uploaded_file.name}' uploaded successfully!")
                 st.markdown(f"""
                 <div class="pdf-info">
                     <strong>📄 Document Info:</strong><br>
-                    <strong>Filename:</strong> {uploaded_file.name}<br>
-                    <strong>Characters:</strong> {len(pdf_text):,}<br>
-                    <strong>Status:</strong> Ready for chat!
+                    <strong>Filename:</strong> {st.session_state.pdf_filename}<br>
+                    <strong>Status:</strong> {data.get("message", "")}
                 </div>
                 """, unsafe_allow_html=True)
                 
                 st.rerun()
+            except Exception as e:
+                st.error(f"Upload failed: {str(e)}")
 
 def display_pdf_info():
     st.markdown(f"""
@@ -271,18 +316,6 @@ def display_chat_messages():
             </div>
             """, unsafe_allow_html=True)
 
-def get_bot_response(user_message, pdf_content):
-    import random
-    responses = [
-        f"Based on your document, regarding '{user_message}': I can see this relates to the content in your PDF. Let me analyze the relevant sections...",
-        f"From what I understand about '{user_message}' in your document: This appears to be discussed in several parts of your PDF...",
-        f"Looking at your question about '{user_message}': I found relevant information in your uploaded document...",
-        f"Regarding '{user_message}' in your PDF: The document contains information that addresses this topic...",
-        f"Based on the content of '{st.session_state.pdf_filename}', about '{user_message}': Here's what I found..."
-    ]
-    
-    return random.choice(responses)
-
 def scroll_to_bottom():
     st.markdown("""
     <script>
@@ -315,6 +348,44 @@ def handle_user_input():
     
     return user_input, send_button
 
+def clear_memory_api():
+    try:
+        response = requests.post("http://localhost:8000/clear-memory")
+        response.raise_for_status()
+        return response.json().get("message", "✅ Memory cleared")
+    except Exception as e:
+        return f"❌ Failed to clear memory: {str(e)}"
+
+def clear_all_vectors_api():
+    try:
+        response = requests.post("http://localhost:8000/clear_all_vectors")
+        response.raise_for_status()
+        return response.json().get("message", "✅ All vectors cleared")
+    except Exception as e:
+        return f"❌ Failed to clear vectors: {str(e)}"
+
+def get_conversation_history_api():
+    try:
+        response = requests.get("http://localhost:8000/conversation-history")
+        response.raise_for_status()
+        return response.json() 
+    except Exception as e:
+        st.error(f"❌ Failed to fetch history: {str(e)}")
+        return []
+
+def reset_everything():
+    msg1 = clear_memory_api()
+    msg2 = clear_all_vectors_api()
+    
+    st.session_state.messages = []
+    st.session_state.chat_history = []
+    st.session_state.pdf_uploaded = False
+    st.session_state.pdf_content = ""
+    st.session_state.pdf_filename = ""
+    st.session_state.input_key += 1
+
+    st.success("✅ Everything has been reset.")
+
 def process_message(user_input):
     timestamp = datetime.now().strftime("%H:%M")
     
@@ -324,8 +395,8 @@ def process_message(user_input):
         "timestamp": timestamp
     })
     
-    with st.spinner("🤔 Analyzing document..."):
-        bot_response = get_bot_response(user_input, st.session_state.pdf_content)
+    with st.spinner("🤖 Thinking..."):
+        bot_response = get_bot_response_from_api(user_input)
     
     st.session_state.messages.append({
         "role": "assistant",
