@@ -4,6 +4,7 @@ from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_core.output_parsers import StrOutputParser
 from typing import List, Dict, Optional
+import time
 from config import Config
 
 class LangChainVectorStore(VectorStore):
@@ -44,6 +45,8 @@ class AIService:
             model="qwen/qwen-2.5-72b-instruct",  
             temperature=self.config.TEMPERATURE,
             max_tokens=self.config.MAX_TOKENS,
+            request_timeout=120,
+            max_retries=3,
         )
         
         self.vector_service = vector_service
@@ -53,6 +56,7 @@ class AIService:
             self.vector_store = None
         
         self.conversation_history = []
+        self.max_history_length = 6
         
         self._setup_chains()
     

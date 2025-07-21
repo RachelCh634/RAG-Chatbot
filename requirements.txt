@@ -9,7 +9,6 @@ requests
 pytest
 httpx
 python-multipart
-sentence_transformers
 openai
 langchain
 langchain-openai
@@ -18,3 +17,8 @@ paddleocr
 pymupdf
 fitz
 paddlepaddle
+torch
+torchvision
+open-clip-torch
+ftfy
+regex

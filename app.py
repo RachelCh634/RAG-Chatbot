@@ -7,7 +7,7 @@ def get_bot_response_from_api(user_message):
     api_url = "http://localhost:8000/chat"
     try:
         payload = {"query": user_message}
-        response = requests.post(api_url, json=payload, timeout=30)
+        response = requests.post(api_url, json=payload, timeout=600)
         response.raise_for_status()
         result = response.json()
         return result.get("answer", "⚠️ No answer returned.")
@@ -231,7 +231,7 @@ def render_sidebar():
         if st.session_state.get("pdf_uploaded", False):
             if st.button("📤 Upload New PDF"):
                 def clear_vectors():
-                    response = requests.post("http://localhost:8000/clear_all_vectors", timeout=10)
+                    response = requests.post("http://localhost:8000/clear_all_vectors", timeout=60)
                     response.raise_for_status()
                     return response.json()
                 
@@ -254,7 +254,7 @@ def render_sidebar():
         with col1:
             if st.button("🧠 Clear Memory"):
                 def clear_memory():
-                    response = requests.post("http://localhost:8000/clear-memory", timeout=10)
+                    response = requests.post("http://localhost:8000/clear-memory", timeout=60)
                     response.raise_for_status()
                     return response.json()
                 
@@ -275,8 +275,8 @@ def render_sidebar():
         st.markdown("---")
         if st.button("🔴 Complete Reset"):
             def reset_all():
-                requests.post("http://localhost:8000/clear-memory", timeout=10)
-                requests.post("http://localhost:8000/clear_all_vectors", timeout=10)
+                requests.post("http://localhost:8000/clear-memory", timeout=60)
+                requests.post("http://localhost:8000/clear_all_vectors", timeout=60)
                 return True
             
             result = safe_api_call(reset_all, "Reset failed")
@@ -310,7 +310,7 @@ def display_history_modal():
     
     with st.spinner("Loading history..."):
         def get_history():
-            response = requests.get("http://localhost:8000/conversation-history", timeout=10)
+            response = requests.get("http://localhost:8000/conversation-history", timeout=60)
             response.raise_for_status()
             return response.json()
         
@@ -421,7 +421,7 @@ def handle_pdf_upload():
             response = requests.post(
                 "http://localhost:8000/upload-pdf", 
                 files=files,
-                timeout=300 
+                timeout=600 
             )
             
             if response.status_code == 400:
@@ -483,8 +483,11 @@ def display_chat_messages():
     chat_container = st.container()
     with chat_container:
         for i, message in enumerate(st.session_state.messages):
-            content = str(message.get("content", "")).replace('\n', '<br>')
+            content = str(message.get("content", ""))
+            
             if message["role"] == "user":
+                # User messages - simple HTML conversion
+                content = content.replace('\n', '<br>')
                 st.markdown(f"""
                 <div class="user-message">
                     <strong>👤 You:</strong><br>
@@ -493,13 +496,14 @@ def display_chat_messages():
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.markdown(f"""
-                <div class="bot-message">
-                    <strong>🤖 Assistant:</strong><br>
-                    {content}
-                    <div class="message-time">{message.get("timestamp", "")}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                # Bot messages - use container to keep everything inside the box
+                with st.container():
+                    st.markdown('<div class="bot-message">', unsafe_allow_html=True)
+                    st.markdown("**🤖 Assistant:**")
+                    st.markdown(content)
+                    st.markdown(f'<div class="message-time">{message.get("timestamp", "")}</div>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
 
 def handle_user_input():
     # Handle user input and send button

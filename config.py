@@ -25,7 +25,7 @@ class Config:
     
     # AI model settings
     AI_MODEL = "qwen/qwen-2.5-72b-instruct"
-    MAX_TOKENS = 200
+    MAX_TOKENS = 2000
     TEMPERATURE = 0.2
     TOP_P = 0.9
     
