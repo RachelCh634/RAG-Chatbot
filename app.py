@@ -1,29 +1,39 @@
 import streamlit as st
 from datetime import datetime
-import PyPDF2
-from io import BytesIO
 import requests
 
 def get_bot_response_from_api(user_message):
+    # Get response from API endpoint
     api_url = "http://localhost:8000/chat"
     try:
         payload = {"query": user_message}
-        response = requests.post(api_url, json=payload)
+        response = requests.post(api_url, json=payload, timeout=30)
         response.raise_for_status()
         result = response.json()
         return result.get("answer", "⚠️ No answer returned.")
+    except requests.exceptions.ConnectionError:
+        return "❌ Cannot connect to server. Please check if the backend is running."
+    except requests.exceptions.Timeout:
+        return "⏱️ Request timeout. Please try again."
+    except requests.exceptions.HTTPError as e:
+        return f"❌ Server error: {e.response.status_code}"
     except Exception as e:
-        return f"❌ API error: {str(e)}"
+        return f"❌ Unexpected error: {str(e)[:100]}"
 
 def configure_page():
-    st.set_page_config(
-        page_title="RAG Chatbot",
-        page_icon="🤖",
-        layout="centered",
-        initial_sidebar_state="expanded"
-    )
+    # Set up page configuration
+    try:
+        st.set_page_config(
+            page_title="RAG Chatbot",
+            page_icon="🤖",
+            layout="centered",
+            initial_sidebar_state="expanded"
+        )
+    except Exception:
+        pass
 
 def apply_custom_css():
+    # Apply custom CSS styling
     st.markdown("""
     <style>
         .main {
@@ -70,6 +80,7 @@ def apply_custom_css():
             padding: 1rem;
             background-color: #fafafa;
             min-height: 0;
+            max-height: 500px;
         }
         
         .user-message {
@@ -80,6 +91,9 @@ def apply_custom_css():
             border-left: 4px solid #10a37f;
             max-width: 100%;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
         }
         
         .bot-message {
@@ -90,6 +104,9 @@ def apply_custom_css():
             border-left: 4px solid #6366f1;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             max-width: 100%;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
         }
         
         .message-time {
@@ -134,7 +151,6 @@ def apply_custom_css():
             outline: none;
         }
 
-        
         .sidebar-content {
             padding: 1rem;
         }
@@ -166,129 +182,294 @@ def apply_custom_css():
     """, unsafe_allow_html=True)
 
 def initialize_session_state():
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "input_key" not in st.session_state:
-        st.session_state.input_key = 0
-    if "pdf_uploaded" not in st.session_state:
-        st.session_state.pdf_uploaded = False
-    if "pdf_content" not in st.session_state:
-        st.session_state.pdf_content = ""
-    if "pdf_filename" not in st.session_state:
-        st.session_state.pdf_filename = ""
+    # Initialize session state variables
+    defaults = {
+        "messages": [],
+        "chat_history": [],
+        "input_key": 0,
+        "pdf_uploaded": False,
+        "pdf_content": "",
+        "pdf_filename": "",
+        "processing_message": False,
+        "show_history_modal": False,
+        "last_input": None
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-def extract_pdf_text(pdf_file):
+def safe_api_call(func, error_message="Operation failed"):
+    # Safely execute API calls with error handling
     try:
-        pdf_file.seek(0)  # Reset file pointer to beginning
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text
+        return func()
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Cannot connect to server")
+        return None
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Request timeout")
+        return None
     except Exception as e:
-        st.error(f"Error reading PDF: {str(e)}")
+        st.error(f"❌ {error_message}: {str(e)[:50]}")
         return None
 
 def render_sidebar():
+    # Render sidebar controls
     with st.sidebar:
         st.markdown("<div class='sidebar-content'>", unsafe_allow_html=True)
-        st.header("⚙️ Settings")
+        st.header("⚙️ Controls")
         
-        if st.button("🗑️ Clear History"):
+        st.subheader("💬 Chat Management")
+        if st.button("🗑️ Clear Chat"):
             st.session_state.messages = []
             st.session_state.chat_history = []
             st.session_state.input_key += 1
+            st.session_state.processing_message = False
             st.rerun()
         
-        if st.button("🧠 Clear Memory"):
-            result = clear_memory_api()
-            st.success(result)
+        st.subheader("📄 Document Management")
+        if st.session_state.get("pdf_uploaded", False):
+            if st.button("📤 Upload New PDF"):
+                def clear_vectors():
+                    response = requests.post("http://localhost:8000/clear_all_vectors", timeout=10)
+                    response.raise_for_status()
+                    return response.json()
+                
+                result = safe_api_call(clear_vectors, "Failed to clear vectors")
+                if result:
+                    st.session_state.pdf_uploaded = False
+                    st.session_state.pdf_content = ""
+                    st.session_state.pdf_filename = ""
+                    st.session_state.messages = []
+                    st.session_state.processing_message = False
+                    st.session_state.input_key += 1
+                    st.success("Ready for new document")
+                    st.rerun()
+        else:
+            st.info("📄 Upload a PDF to start chatting")
+        
+        st.subheader("🔧 Server Management")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🧠 Clear Memory"):
+                def clear_memory():
+                    response = requests.post("http://localhost:8000/clear-memory", timeout=10)
+                    response.raise_for_status()
+                    return response.json()
+                
+                result = safe_api_call(clear_memory, "Failed to clear memory")
+                if result:
+                    st.session_state.messages = []
+                    st.session_state.chat_history = []
+                    st.session_state.input_key += 1
+                    st.session_state.processing_message = False
+                    st.success("Memory cleared")
+                    st.rerun()
+        
+        with col2:
+            if st.button("📜 Show History"):
+                st.session_state.show_history_modal = True
+                st.rerun()
 
-        if st.button("🧹 Clear All Vectors"):
-            result = clear_all_vectors_api()
-            st.success(result)
-
-        if st.button("📜 Show History"):
-            response = get_conversation_history_api()
-            if response.get("status") == "success" and "history" in response:
-                history = response["history"]
-                if history:
-                    st.markdown("### 🧾 Server-side History:")
-                    for item in history:
-                        user = item.get('user', 'N/A')
-                        bot = item.get('bot', 'N/A')
-                        st.markdown(f"- **User:** {user}")
-                        st.markdown(f"  **Bot:** {bot}")
-                        st.markdown("---")
-                else:
-                    st.info("No history found.")
-            else:
-                st.error("Failed to fetch history from server.")
-
-        if st.button("🔴 Reset Everything"):
-            reset_everything()
-            st.rerun()
-
-        if st.session_state.pdf_uploaded:
-            if st.button("📄 Upload New PDF"):
+        st.markdown("---")
+        if st.button("🔴 Complete Reset"):
+            def reset_all():
+                requests.post("http://localhost:8000/clear-memory", timeout=10)
+                requests.post("http://localhost:8000/clear_all_vectors", timeout=10)
+                return True
+            
+            result = safe_api_call(reset_all, "Reset failed")
+            if result:
+                st.session_state.messages = []
+                st.session_state.chat_history = []
                 st.session_state.pdf_uploaded = False
                 st.session_state.pdf_content = ""
                 st.session_state.pdf_filename = ""
-                st.session_state.messages = []
+                st.session_state.processing_message = False
                 st.session_state.input_key += 1
+                st.success("✅ Complete reset done")
                 st.rerun()
+
+def display_history_modal():
+    # Display conversation history modal
+    if not st.session_state.get("show_history_modal", False):
+        return
         
-        st.markdown("---")
-        st.write(f"Messages in chat: {len(st.session_state.messages)}")
-        if st.session_state.pdf_uploaded:
-            st.write(f"PDF: {st.session_state.pdf_filename}")
-            st.write(f"Characters: {len(st.session_state.pdf_content):,}")
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("""
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0;">🧾 Server History</h3>
+            </div>
+            """, unsafe_allow_html=True)
+    with col2:
+        if st.button("Close", key="close_history"):
+            st.session_state.show_history_modal = False
+            st.rerun()
+    
+    with st.spinner("Loading history..."):
+        def get_history():
+            response = requests.get("http://localhost:8000/conversation-history", timeout=10)
+            response.raise_for_status()
+            return response.json()
         
-        st.markdown("</div>", unsafe_allow_html=True)
+        response = safe_api_call(get_history, "Failed to load history")
+        
+        if response and response.get("status") == "success" and "history" in response:
+            history = response["history"]
+            if history:
+                for i, item in enumerate(history, 1):
+                    question = item.get('question', 'N/A')
+                    answer = item.get('answer', 'N/A')
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background-color: #f7f7f8;
+                        padding: 1rem;
+                        border-radius: 8px;
+                        margin: 1rem 0;
+                        border-left: 4px solid #10a37f;
+                    ">
+                        <strong>👤 Question {i}:</strong><br>
+                        {question}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background-color: #ffffff;
+                        padding: 1rem;
+                        border-radius: 8px;
+                        margin: 1rem 0;
+                        border-left: 4px solid #6366f1;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                    ">
+                        <strong>🤖 Answer:</strong><br>
+                        {answer}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if i < len(history):
+                        st.markdown("<hr style='margin: 2rem 0; border-color: #e5e7eb;'>", unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="
+                    text-align: center;
+                    padding: 3rem;
+                    background-color: #f8fafc;
+                    border: 2px dashed #cbd5e1;
+                    border-radius: 12px;
+                    color: #64748b;
+                    margin: 1rem 0;
+                    width: 100%;
+                ">
+                    <h3>📭 No History Available</h3>
+                    <p>No conversations have been saved on the server yet</p>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="
+                text-align: center;
+                padding: 3rem;
+                background-color: #fef2f2;
+                border: 2px solid #fca5a5;
+                border-radius: 12px;
+                color: #dc2626;
+                margin: 2rem 0;
+                width: 100%;
+            ">
+                <h3>Error Loading History</h3>
+                <p>Unable to load history from the server</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 def handle_pdf_upload():
+    # Handle PDF file upload
     uploaded_file = st.file_uploader(
         "Choose a PDF file",
         type="pdf",
         help="Upload a PDF document to analyze and chat about"
     )
     
-    if uploaded_file is not None:
-        with st.spinner("📤 Uploading PDF to server..."):
-            try:
-                files = {'file': (uploaded_file.name, uploaded_file, "application/pdf")}
-                response = requests.post("http://localhost:8000/upload-pdf", files=files)
-                response.raise_for_status()
-                data = response.json()
+    if uploaded_file is None:
+        return
+        
+    if uploaded_file.size > 200 * 1024 * 1024:
+        st.error("File too large. Please upload a PDF smaller than 200MB.")
+        return
+    
+    if uploaded_file.size == 0:
+        st.error("File is empty. Please upload a valid PDF file.")
+        return
+        
+    with st.spinner("Uploading PDF to server..."):
+        try:
+            uploaded_file.seek(0)
+            file_content = uploaded_file.read()
+            
+            if len(file_content) == 0:
+                st.error("File content is empty.")
+                return
+            
+            uploaded_file.seek(0)
+            files = {
+                'file': (uploaded_file.name, uploaded_file, 'application/pdf')
+            }
+            
+            response = requests.post(
+                "http://localhost:8000/upload-pdf", 
+                files=files,
+                timeout=300 
+            )
+            
+            if response.status_code == 400:
+                try:
+                    error_detail = response.json().get("detail", response.text)
+                except:
+                    error_detail = response.text
+                st.error(f"Upload failed: {error_detail}")
+                return
+            
+            response.raise_for_status()
+            data = response.json()
 
-                st.session_state.pdf_uploaded = True
-                st.session_state.pdf_filename = data.get("filename", uploaded_file.name)
-                st.session_state.pdf_content = "Uploaded to vector DB ✅"
+            st.session_state.pdf_uploaded = True
+            st.session_state.pdf_filename = data.get("filename", uploaded_file.name)
+            st.session_state.pdf_content = "Uploaded to vector DB ✅"
 
-                st.success(f"PDF '{uploaded_file.name}' uploaded successfully!")
-                st.markdown(f"""
-                <div class="pdf-info">
-                    <strong>📄 Document Info:</strong><br>
-                    <strong>Filename:</strong> {st.session_state.pdf_filename}<br>
-                    <strong>Status:</strong> {data.get("message", "")}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.rerun()
-            except Exception as e:
-                st.error(f"Upload failed: {str(e)}")
+            st.success(f"PDF '{uploaded_file.name}' uploaded successfully!")
+            st.markdown(f"""
+            <div class="pdf-info">
+                <strong>📄 Document Info:</strong><br>
+                <strong>Filename:</strong> {st.session_state.pdf_filename}<br>
+                <strong>Status:</strong> {data.get("message", "")}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.rerun()
+            
+        except requests.exceptions.ConnectionError:
+            st.error("❌ Cannot connect to server. Make sure your backend server is running on http://localhost:8000")
+        except requests.exceptions.Timeout:
+            st.error("❌ Upload timeout. The file might be too large or the server is busy.")
+        except requests.exceptions.HTTPError as e:
+            st.error(f"❌ HTTP error during upload: {e}")
+        except Exception as e:
+            st.error(f"❌ Upload failed: {str(e)}")
 
 def display_pdf_info():
+    # Display current PDF information
     st.markdown(f"""
     <div class="pdf-info">
         <strong>📄 Current Document:</strong> {st.session_state.pdf_filename}<br>
-        <strong>Characters:</strong> {len(st.session_state.pdf_content):,}
+        <strong>Status:</strong> Ready for questions
     </div>
     """, unsafe_allow_html=True)
 
 def display_welcome_message():
+    # Display welcome message for new chat
     st.markdown(f"""
     <div class="welcome-message">
         <h3>Hello! I'm ready to help you with your document</h3>
@@ -298,37 +479,30 @@ def display_welcome_message():
     """, unsafe_allow_html=True)
 
 def display_chat_messages():
-    for i, message in enumerate(st.session_state.messages):
-        if message["role"] == "user":
-            st.markdown(f"""
-            <div class="user-message">
-                <strong>👤 You:</strong><br>
-                {message["content"]}
-                <div class="message-time">{message.get("timestamp", "")}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="bot-message">
-                <strong>🤖 Assistant:</strong><br>
-                {message["content"]}
-                <div class="message-time">{message.get("timestamp", "")}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-def scroll_to_bottom():
-    st.markdown("""
-    <script>
-        setTimeout(function() {
-            var chatMessages = document.getElementById('chat-messages');
-            if (chatMessages) {
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            }
-        }, 100);
-    </script>
-    """, unsafe_allow_html=True)
+    # Display chat conversation messages
+    chat_container = st.container()
+    with chat_container:
+        for i, message in enumerate(st.session_state.messages):
+            content = str(message.get("content", "")).replace('\n', '<br>')
+            if message["role"] == "user":
+                st.markdown(f"""
+                <div class="user-message">
+                    <strong>👤 You:</strong><br>
+                    {content}
+                    <div class="message-time">{message.get("timestamp", "")}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="bot-message">
+                    <strong>🤖 Assistant:</strong><br>
+                    {content}
+                    <div class="message-time">{message.get("timestamp", "")}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 def handle_user_input():
+    # Handle user input and send button
     st.markdown('<div class="input-container">', unsafe_allow_html=True)
     
     col1, col2 = st.columns([5, 1])
@@ -337,77 +511,70 @@ def handle_user_input():
         user_input = st.text_input(
             "Ask about your document...",
             key=f"user_input_{st.session_state.input_key}",
-            placeholder="What would you like to know about this document?",
-            label_visibility="collapsed"
+            placeholder="🤖 Processing..." if st.session_state.processing_message else "What would you like to know about this document?",
+            label_visibility="collapsed",
+            disabled=st.session_state.processing_message
         )
     
     with col2:
-        send_button = st.button("Send", use_container_width=True)
+        send_button = st.button(
+            "🤖" if st.session_state.processing_message else "Send", 
+            use_container_width=True,
+            disabled=st.session_state.processing_message
+        )
     
-    st.markdown('</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     
     return user_input, send_button
 
-def clear_memory_api():
-    try:
-        response = requests.post("http://localhost:8000/clear-memory")
-        response.raise_for_status()
-        return response.json().get("message", "✅ Memory cleared")
-    except Exception as e:
-        return f"❌ Failed to clear memory: {str(e)}"
-
-def clear_all_vectors_api():
-    try:
-        response = requests.post("http://localhost:8000/clear_all_vectors")
-        response.raise_for_status()
-        return response.json().get("message", "✅ All vectors cleared")
-    except Exception as e:
-        return f"❌ Failed to clear vectors: {str(e)}"
-
-def get_conversation_history_api():
-    try:
-        response = requests.get("http://localhost:8000/conversation-history")
-        response.raise_for_status()
-        return response.json() 
-    except Exception as e:
-        st.error(f"❌ Failed to fetch history: {str(e)}")
-        return []
-
-def reset_everything():
-    msg1 = clear_memory_api()
-    msg2 = clear_all_vectors_api()
-    
-    st.session_state.messages = []
-    st.session_state.chat_history = []
-    st.session_state.pdf_uploaded = False
-    st.session_state.pdf_content = ""
-    st.session_state.pdf_filename = ""
-    st.session_state.input_key += 1
-
-    st.success("✅ Everything has been reset.")
-
 def process_message(user_input):
+    # Process user message and add to conversation
+    if not user_input or not user_input.strip():
+        return
+        
     timestamp = datetime.now().strftime("%H:%M")
-    
     st.session_state.messages.append({
         "role": "user",
         "content": user_input,
         "timestamp": timestamp
     })
     
-    with st.spinner("🤖 Thinking..."):
-        bot_response = get_bot_response_from_api(user_input)
-    
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": bot_response,
-        "timestamp": datetime.now().strftime("%H:%M")
-    })
-    
+    st.session_state.processing_message = True
     st.session_state.input_key += 1
     st.rerun()
 
+def get_bot_response_and_update():
+    # Get bot response and update conversation
+    if not st.session_state.processing_message or not st.session_state.messages:
+        return
+        
+    last_user_message = None
+    for msg in reversed(st.session_state.messages):
+        if msg["role"] == "user":
+            last_user_message = msg["content"]
+            break
+    
+    if not last_user_message:
+        st.session_state.processing_message = False
+        return
+        
+    display_chat_messages()
+    
+    with st.spinner("🤖 Thinking..."):
+        bot_response = get_bot_response_from_api(last_user_message)
+    
+    if bot_response:
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": str(bot_response),
+            "timestamp": datetime.now().strftime("%H:%M")
+        })
+    
+    st.session_state.processing_message = False
+    st.rerun()
+
 def render_footer():
+    # Render page footer
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #6b7280; font-size: 0.9rem; padding: 1rem;'>
@@ -416,6 +583,7 @@ def render_footer():
     """, unsafe_allow_html=True)
 
 def main():
+    # Main application function
     configure_page()
     apply_custom_css()
     initialize_session_state()
@@ -424,23 +592,38 @@ def main():
     
     render_sidebar()
     
+    if st.session_state.get("show_history_modal", False):
+        display_history_modal()
+        return  
+    
     if not st.session_state.pdf_uploaded:
         handle_pdf_upload()
     else:
         display_pdf_info()
         
-        if not st.session_state.messages:
+        if st.session_state.processing_message:
+            get_bot_response_and_update()
+        elif not st.session_state.messages:
             display_welcome_message()
         else:
             display_chat_messages()
         
         user_input, send_button = handle_user_input()
         
-        if (send_button or user_input) and user_input.strip():
-            process_message(user_input)
-        
-        if st.session_state.messages:
-            scroll_to_bottom()
+        if not st.session_state.processing_message:
+            should_send = False
+            
+            if send_button and user_input and user_input.strip():
+                should_send = True
+            elif user_input and user_input.strip():
+                last_input = st.session_state.get('last_input')
+                if last_input != user_input:
+                    if not st.session_state.messages or st.session_state.messages[-1]["content"] != user_input:
+                        should_send = True
+            
+            if should_send:
+                st.session_state.last_input = user_input
+                process_message(user_input)
     
     render_footer()
 
