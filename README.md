@@ -1,91 +1,79 @@
-## PDF RAG API
 
-A FastAPI-based system for PDF processing and intelligent question-answering using Retrieval-Augmented Generation (RAG).
+# Construction Estimation Chatbot
 
-### Features
+This project is a RAG-based intelligent chatbot that extracts door and window schedules from architectural floorplans in PDF format, calculates areas, and provides cost estimations using an LLM (Qwen3 via OpenRouter) with vector search (Pinecone).
 
-- PDF validation and processing
-- Vector database storage (Pinecone/local)
-- Semantic search
-- AI-powered question answering
-- Chat with context memory
+---
 
-### API Endpoints
+## Tech Stack
 
-### 1. Home
-- **Endpoint:** `GET /`
-- **Description:** Health check - confirms API is running
-- **Response:** Status message
+- **FastAPI** – Backend API
+- **Streamlit** – Web-based client
+- **PaddleOCR** – For scanned PDF text extraction
+- **OpenCLIP** – Embedding model for text chunks
+- **Pinecone** – Vector database
+- **LangChain** – Retrieval-Augmented Generation orchestration
+- **OpenRouter (Qwen3)** – LLM provider
+- **Docker** – Containerization
 
-### 2. Validate PDF
-- **Endpoint:** `POST /validate-pdf`
-- **Description:** Validates uploaded PDF file format and extracts basic file information
-- **Input:** PDF file upload
-- **Response:** Validation status and file metadata
+---
 
-### 3. Upload PDF
-- **Endpoint:** `POST /upload-pdf`
-- **Description:** Processes PDF, extracts text, and stores vectors in database
-- **Input:** PDF file upload
-- **Response:** Upload confirmation with chunk and vector statistics
+## Folder Structure
 
-### 4. Search Documents
-- **Endpoint:** `POST /search`
-- **Description:** Performs semantic search across stored documents
-- **Input:** JSON with `query` (string) and `top_k` (number of results)
-- **Response:** Ranked search results with relevance scores
-
-### 5. Ask Question
-- **Endpoint:** `POST /ask`
-- **Description:** Answers questions using document context and AI
-- **Input:** JSON with `query` (question string)
-- **Response:** AI-generated answer with confidence score and sources
-
-### 6. Chat with Context
-- **Endpoint:** `POST /chat`
-- **Description:** Conversational interface with memory and document context
-- **Input:** JSON with `query` (message) and `history` (conversation history)
-- **Response:** Contextual AI response
-
-## Usage Examples
-
-### Upload a PDF
-```bash
-curl -X POST "http://localhost:8000/upload-pdf" \
-  -F "file=@document.pdf"
+```
+.
+├── main.py                   # FastAPI app (PDF upload, chat endpoints)
+├── streamlit_app.py          # Streamlit UI client
+├── door_schedule_parser.py   # Door parsing & cost calculation logic
+├── pdf_processor.py          # OCR & PDF text extraction
+├── vector_service.py         # Embedding + Pinecone vector database
+├── ai_service.py             # LLM integration & RAG orchestration
+├── models.py                 # Data models & schemas
+├── config.py                 # Configuration settings
+├── docker-compose.yml        # Docker orchestration
+├── Dockerfile                # Container build instructions
+├── requirements.txt          # Python dependencies
+├── .env                      # Environment variables
+└── README.md                 # This file
 ```
 
-### Search Documents
-```bash
-curl -X POST "http://localhost:8000/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "machine learning", "top_k": 5}'
+---
+
+## Setup Instructions
+
+### 1. Create `.env` file
+```env
+PINECONE_API_KEY=your_pinecone_key
+OPENROUTER_API_KEY=your_openrouter_key
 ```
 
-### Ask a Question
+### 2. Build and run the project
 ```bash
-curl -X POST "http://localhost:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is the main conclusion?"}'
+docker-compose up --build
 ```
 
-### Chat
-```bash
-curl -X POST "http://localhost:8000/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Explain this concept", "history": []}'
-```
+---
 
-## Running the API
+## Deliverables (as per requirements)
 
-```bash
-python main.py
-```
+- Working FastAPI app with OCR & vector search
+- LangChain RAG pipeline with Qwen3
+- Docker + `.env` config
+- Streamlit interface
+- Research document
+- README file
+- Lucidchart diagrams
+- Sample PDF + test flow
 
-The API will be available at `http://localhost:8000`
+---
 
-## Components
+## Troubleshooting
 
-- **PDFProcessor:** Handles PDF validation and text extraction
-- **VectorService:** Manages vector storage and similarity search
-- **AIService:** Provides AI-powered responses using Qwen3 model
+| Problem                          | Solution                              |
+|----------------------------------|----------------------------------------|
+| Pinecone not responding          | Check `.env` and index status          |
+| OCR returns empty text           | Make sure PDF isn't encrypted or low-quality |
+| LLM gives poor answers           | Check vector chunks or prompt formatting |
+| Docker build fails               | Rebuild with `--no-cache`              |
+
+---

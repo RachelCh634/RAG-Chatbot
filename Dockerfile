@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app/
 
-CMD python -B -m uvicorn main:app --reload
+CMD python -B -m uvicorn main:app --reload & streamlit run app.py
