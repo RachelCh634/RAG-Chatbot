@@ -15,7 +15,6 @@ langchain-openai
 langchain-community
 paddleocr 
 pymupdf
-fitz
 paddlepaddle
 torch
 torchvision

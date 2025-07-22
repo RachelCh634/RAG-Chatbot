@@ -11,7 +11,7 @@ Pinecone was selected over FAISS for the following reasons:
 
 While FAISS is open-source and suitable for local or research use, Pinecone is more suitable for cloud-based and scalable solutions.
 
-**Reference**: [Pinecone vs FAISS Comparison](https://www.pinecone.io/learn/faiss-vs-pinecone/)
+**Reference**: [Pinecone vs FAISS Comparison](https://www.pinecone.io/)
 
 ---
 
