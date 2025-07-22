@@ -11,7 +11,7 @@ class Config:
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     
     # File settings
-    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    MAX_FILE_SIZE = 5 * 1024 * 1024 
     ALLOWED_EXTENSIONS = [".pdf"]
     
     # Vector Database settings
@@ -25,7 +25,7 @@ class Config:
     
     # AI model settings
     AI_MODEL = "qwen/qwen-2.5-72b-instruct"
-    MAX_TOKENS = 2000
+    MAX_TOKENS = 600
     TEMPERATURE = 0.2
     TOP_P = 0.9
     

@@ -479,31 +479,50 @@ def display_welcome_message():
     """, unsafe_allow_html=True)
 
 def display_chat_messages():
-    # Display chat conversation messages
+    # Display chat conversation messages exactly like history
     chat_container = st.container()
     with chat_container:
         for i, message in enumerate(st.session_state.messages):
             content = str(message.get("content", ""))
+            timestamp = message.get("timestamp", "")
             
             if message["role"] == "user":
-                # User messages - simple HTML conversion
-                content = content.replace('\n', '<br>')
                 st.markdown(f"""
-                <div class="user-message">
+                <div style="
+                    background-color: #f7f7f8;
+                    padding: 1rem;
+                    border-radius: 8px;
+                    margin: 1rem 0;
+                    border-left: 4px solid #10a37f;
+                ">
                     <strong>👤 You:</strong><br>
                     {content}
-                    <div class="message-time">{message.get("timestamp", "")}</div>
+                    <div style="
+                        font-size: 0.8rem;
+                        color: #6b7280;
+                        margin-top: 0.5rem;
+                    ">{timestamp}</div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                # Bot messages - use container to keep everything inside the box
-                with st.container():
-                    st.markdown('<div class="bot-message">', unsafe_allow_html=True)
-                    st.markdown("**🤖 Assistant:**")
-                    st.markdown(content)
-                    st.markdown(f'<div class="message-time">{message.get("timestamp", "")}</div>', unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-
+                st.markdown(f"""
+                <div style="
+                    background-color: #ffffff;
+                    padding: 1rem;
+                    border-radius: 8px;
+                    margin: 1rem 0;
+                    border-left: 4px solid #6366f1;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                ">
+                    <strong>🤖 Assistant:</strong><br>
+                    {content}
+                    <div style="
+                        font-size: 0.8rem;
+                        color: #6b7280;
+                        margin-top: 0.5rem;
+                    ">{timestamp}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 def handle_user_input():
     # Handle user input and send button
