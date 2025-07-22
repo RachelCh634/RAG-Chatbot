@@ -3,6 +3,7 @@ from models import ChatRequest, ChatResponse
 from pdf_processor import PDFProcessor
 from vector_service import VectorService
 from ai_service import AIService  
+from door_schedule_parser import parse_door_schedule, create_door_embeddings_text, generate_door_summary
 
 app = FastAPI(title="PDF RAG API", description="API for PDF processing and Q&A")
 
@@ -16,14 +17,23 @@ async def upload_pdf(file: UploadFile = File(...)):
     try:
         file_content = await file.read()
         pdf_processor.validate_file(file.filename, file_content)
-        full_text, num_pages = pdf_processor.extract_text_from_pdf(file_content)
+        full_text, num_pages = pdf_processor.extract_text(file_content)
         
         if isinstance(full_text, list):
             full_text = " ".join(full_text)
         elif full_text is None:
             full_text = ""
         
-        result = vector_service.store_vectors(file.filename, full_text)
+        doors = parse_door_schedule(full_text)
+        door_summary = generate_door_summary(doors) if doors else None
+        if doors:
+            door_embeddings = create_door_embeddings_text(doors)
+            combined_text = full_text + "\n\n" + "\n".join(door_embeddings)
+        else:
+            combined_text = full_text
+            door_embeddings = []
+        
+        result = vector_service.store_vectors(file.filename, combined_text)
         
         return {
             "status": "success",
@@ -31,12 +41,16 @@ async def upload_pdf(file: UploadFile = File(...)):
             "filename": result.get("filename", file.filename),
             "chunks_stored": result.get("chunks_stored", 0),
             "total_vectors": result.get("total_vectors", 0),
-            "upload_success": result.get("upload_success", True)
+            "upload_success": result.get("upload_success", True),
+            "doors_found": len(doors),
+            "door_summary": door_summary,
+            "doors": doors[:5] if doors else []  
         }
         
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 

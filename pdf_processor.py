@@ -81,32 +81,59 @@ class PDFProcessor:
                 detail="PyMuPDF (fitz) is required for OCR image extraction"
             )
 
-        pdf_file = io.BytesIO(file_content)
-        doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-        ocr_text = ""
+        try:
+            pdf_file = io.BytesIO(file_content)
+            doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+            ocr_text = ""
 
-        for page_num in range(len(doc)):
-            page = doc.load_page(page_num)
-            zoom_matrix = fitz.Matrix(2, 2)
-            pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                zoom_matrix = fitz.Matrix(2, 2)
+                pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
 
-            img_bytes = pix.tobytes("png")
+                img_bytes = pix.tobytes("png")
 
-            ocr_result = self.ocr.ocr(img_bytes, cls=True)
+                ocr_result = self.ocr.ocr(img_bytes, cls=True)
+                
+                if ocr_result and isinstance(ocr_result, list):
+                    for line in ocr_result:
+                        if line and isinstance(line, list):
+                            for word_info in line:
+                                if word_info and len(word_info) > 1 and len(word_info[1]) > 0:
+                                    ocr_text += word_info[1][0] + " "
+                            ocr_text += "\n"
 
-            for line in ocr_result:
-                for word_info in line:
-                    ocr_text += word_info[1][0] + " "
-                ocr_text += "\n"
+            return ocr_text
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"OCR processing failed: {str(e)}"
+            )
 
-        return ocr_text
 
     def extract_text(self, file_content: bytes) -> Tuple[str, int]:
-        """Combine PDF text extraction and OCR"""
-        pdf_text, num_pages = self.extract_text_from_pdf(file_content)
-        ocr_text = self.extract_text_with_ocr(file_content)
+        """Combine PDF text extraction and OCR with error handling"""
+        try:
+            pdf_text, num_pages = self.extract_text_from_pdf(file_content)
+        except HTTPException as e:
+            print(f"[PDF] extract_text_from_pdf failed: {e.detail}")
+            pdf_text, num_pages = "", 0
+        except Exception as e:
+            print(f"[PDF] Unexpected error in extract_text_from_pdf: {e}")
+            pdf_text, num_pages = "", 0
+
+        try:
+            ocr_text = self.extract_text_with_ocr(file_content)
+        except HTTPException as e:
+            print(f"[OCR] extract_text_with_ocr failed: {e.detail}")
+            ocr_text = ""
+        except Exception as e:
+            print(f"[OCR] Unexpected error in extract_text_with_ocr: {e}")
+            ocr_text = ""
 
         combined_text = (pdf_text + "\n" + ocr_text).strip()
+
         if not combined_text:
             raise HTTPException(
                 status_code=400,
