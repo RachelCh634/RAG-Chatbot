@@ -3,7 +3,8 @@ import json
 import time
 import uuid
 from typing import List, Dict, Any, Optional
-from sentence_transformers import SentenceTransformer
+import torch
+import open_clip
 from dotenv import load_dotenv
 import re
 import numpy as np
@@ -11,12 +12,27 @@ import numpy as np
 load_dotenv()
 
 class VectorService:
-    """Optimized Vector Management Service with Pinecone and JSON fallback"""
+    """Optimized Vector Management Service with Pinecone and JSON fallback using OpenCLIP"""
     
-    def __init__(self):
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.embedding_model.max_seq_length = 256  
-        self.dimension = 384
+    def __init__(self, model_name: str = "ViT-B-32", pretrained: str = "openai"):
+        # Initialize OpenCLIP model
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
+        
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            model_name, 
+            pretrained=pretrained, 
+            device=self.device
+        )
+        self.tokenizer = open_clip.get_tokenizer(model_name)
+        
+        # Get the dimension from the model
+        with torch.no_grad():
+            sample_text = self.tokenizer(["test"])
+            sample_features = self.model.encode_text(sample_text.to(self.device))
+            self.dimension = sample_features.shape[-1]
+        
+        print(f"Model: {model_name}, Embedding dimension: {self.dimension}")
         
         self.embedding_cache = {}
         
@@ -85,11 +101,12 @@ class VectorService:
         return chunks
     
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Optimized embedding creation with caching"""
+        """Create embeddings using OpenCLIP with caching"""
         embeddings = []
         texts_to_encode = []
         cache_indices = []
         
+        # Check cache first
         for i, text in enumerate(texts):
             if text in self.embedding_cache:
                 embeddings.append(self.embedding_cache[text])
@@ -98,22 +115,32 @@ class VectorService:
                 texts_to_encode.append(text)
         
         if texts_to_encode:
-            batch_size = 10
+            batch_size = 32  # Adjust based on your GPU memory
             new_embeddings = []
             
-            for i in range(0, len(texts_to_encode), batch_size):
-                batch = texts_to_encode[i:i + batch_size]
-                batch_embeddings = self.embedding_model.encode(
-                    batch,
-                    batch_size=batch_size,
-                    show_progress_bar=False,
-                    convert_to_numpy=True
-                )
-                new_embeddings.extend(batch_embeddings)
+            self.model.eval()
+            with torch.no_grad():
+                for i in range(0, len(texts_to_encode), batch_size):
+                    batch = texts_to_encode[i:i + batch_size]
+                    
+                    # Tokenize batch
+                    tokens = self.tokenizer(batch).to(self.device)
+                    
+                    # Get embeddings
+                    batch_embeddings = self.model.encode_text(tokens)
+                    
+                    # Normalize embeddings (important for CLIP)
+                    batch_embeddings = torch.nn.functional.normalize(batch_embeddings, dim=-1)
+                    
+                    # Convert to CPU and numpy
+                    batch_embeddings = batch_embeddings.cpu().numpy()
+                    new_embeddings.extend(batch_embeddings)
             
+            # Cache new embeddings
             for text, embedding in zip(texts_to_encode, new_embeddings):
                 self.embedding_cache[text] = embedding.tolist()
             
+            # Insert new embeddings in correct positions
             text_idx = 0
             for i, text in enumerate(texts):
                 if i not in cache_indices:
@@ -292,12 +319,17 @@ class VectorService:
         except Exception as e:
             print(f"Could not check index stats: {e}")
         
-        # Continue with regular search
+        # Get query embedding using OpenCLIP
         if query in self.embedding_cache:
             query_embedding = self.embedding_cache[query]
         else:
-            query_embedding = self.embedding_model.encode([query])[0].tolist()
-            self.embedding_cache[query] = query_embedding
+            self.model.eval()
+            with torch.no_grad():
+                tokens = self.tokenizer([query]).to(self.device)
+                query_features = self.model.encode_text(tokens)
+                query_features = torch.nn.functional.normalize(query_features, dim=-1)
+                query_embedding = query_features.cpu().numpy()[0].tolist()
+                self.embedding_cache[query] = query_embedding
         
         results = self.index.query(
             vector=query_embedding,
@@ -331,18 +363,23 @@ class VectorService:
             if not vectors:
                 return []
             
+            # Get query embedding using OpenCLIP
             if query in self.embedding_cache:
                 query_embedding = self.embedding_cache[query]
             else:
-                query_embedding = self.embedding_model.encode([query])[0].tolist()
-                self.embedding_cache[query] = query_embedding
+                self.model.eval()
+                with torch.no_grad():
+                    tokens = self.tokenizer([query]).to(self.device)
+                    query_features = self.model.encode_text(tokens)
+                    query_features = torch.nn.functional.normalize(query_features, dim=-1)
+                    query_embedding = query_features.cpu().numpy()[0].tolist()
+                    self.embedding_cache[query] = query_embedding
             
             query_vec = np.array(query_embedding)
             vector_embeddings = np.array([v['values'] for v in vectors])
             
-            similarities = np.dot(vector_embeddings, query_vec) / (
-                np.linalg.norm(vector_embeddings, axis=1) * np.linalg.norm(query_vec)
-            )
+            # Since we're using normalized vectors, we can use dot product directly
+            similarities = np.dot(vector_embeddings, query_vec)
             
             top_indices = np.argsort(similarities)[-top_k:][::-1]
             
