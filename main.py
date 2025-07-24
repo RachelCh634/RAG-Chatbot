@@ -7,9 +7,11 @@ from door_schedule_parser import parse_door_schedule, create_door_embeddings_tex
 
 app = FastAPI(title="PDF RAG API", description="API for PDF processing and Q&A")
 
+server_ready = False
 pdf_processor = PDFProcessor()
 vector_service = VectorService()
-ai_service = AIService(vector_service)  
+ai_service = AIService(vector_service) 
+server_ready = True
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -18,7 +20,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         file_content = await file.read()
         pdf_processor.validate_file(file.filename, file_content)
         full_text, num_pages = pdf_processor.extract_text(file_content)
-        
+        print(full_text)
         if isinstance(full_text, list):
             full_text = " ".join(full_text)
         elif full_text is None:
@@ -110,6 +112,14 @@ async def get_conversation_history():
 def clear_all_vectors():
     vector_service.clear_all_vectors()
     return {"status": "success", "message": "All vectors cleared"}
+
+@app.get("/healthcheck")
+async def health_check():
+    """Check if server is initialized and ready"""
+    if server_ready:
+        return {"status": "ready"}
+    else:
+        raise HTTPException(status_code=503, detail="Server is not ready yet")
 
 if __name__ == "__main__":
     import uvicorn

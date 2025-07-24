@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime
 import requests
+from streamlit_autorefresh import st_autorefresh
 
 def get_bot_response_from_api(user_message):
     # Get response from API endpoint
@@ -12,13 +13,13 @@ def get_bot_response_from_api(user_message):
         result = response.json()
         return result.get("answer", "⚠️ No answer returned.")
     except requests.exceptions.ConnectionError:
-        return "❌ Cannot connect to server. Please check if the backend is running."
+        return "Cannot connect to server. Please check if the backend is running."
     except requests.exceptions.Timeout:
         return "⏱️ Request timeout. Please try again."
     except requests.exceptions.HTTPError as e:
-        return f"❌ Server error: {e.response.status_code}"
+        return f"Server error: {e.response.status_code}"
     except Exception as e:
-        return f"❌ Unexpected error: {str(e)[:100]}"
+        return f"Unexpected error: {str(e)[:100]}"
 
 def configure_page():
     # Set up page configuration
@@ -204,13 +205,13 @@ def safe_api_call(func, error_message="Operation failed"):
     try:
         return func()
     except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to server")
+        st.error("Cannot connect to server")
         return None
     except requests.exceptions.Timeout:
         st.error("⏱️ Request timeout")
         return None
     except Exception as e:
-        st.error(f"❌ {error_message}: {str(e)[:50]}")
+        st.error(f" {error_message}: {str(e)[:50]}")
         return None
 
 def render_sidebar():
@@ -288,7 +289,7 @@ def render_sidebar():
                 st.session_state.pdf_filename = ""
                 st.session_state.processing_message = False
                 st.session_state.input_key += 1
-                st.success("✅ Complete reset done")
+                st.success("Complete reset done")
                 st.rerun()
 
 def display_history_modal():
@@ -437,7 +438,7 @@ def handle_pdf_upload():
 
             st.session_state.pdf_uploaded = True
             st.session_state.pdf_filename = data.get("filename", uploaded_file.name)
-            st.session_state.pdf_content = "Uploaded to vector DB ✅"
+            st.session_state.pdf_content = "Uploaded to vector DB"
 
             st.success(f"PDF '{uploaded_file.name}' uploaded successfully!")
             st.markdown(f"""
@@ -451,13 +452,13 @@ def handle_pdf_upload():
             st.rerun()
             
         except requests.exceptions.ConnectionError:
-            st.error("❌ Cannot connect to server. Make sure your backend server is running on http://localhost:8000")
+            st.error(" Cannot connect to server. Make sure your backend server is running on http://localhost:8000")
         except requests.exceptions.Timeout:
-            st.error("❌ Upload timeout. The file might be too large or the server is busy.")
+            st.error(" Upload timeout. The file might be too large or the server is busy.")
         except requests.exceptions.HTTPError as e:
-            st.error(f"❌ HTTP error during upload: {e}")
+            st.error(f" HTTP error during upload: {e}")
         except Exception as e:
-            st.error(f"❌ Upload failed: {str(e)}")
+            st.error(f" Upload failed: {str(e)}")
 
 def display_pdf_info():
     # Display current PDF information
@@ -605,7 +606,22 @@ def render_footer():
     </div>
     """, unsafe_allow_html=True)
 
+def is_server_ready():
+    api_url = "http://localhost:8000/healthcheck"
+    try:
+        response = requests.get(api_url, timeout=5)
+        if response.status_code == 200 and response.json().get("status") == "ready":
+            return True
+    except requests.RequestException:
+        pass
+    return False
+
 def main():
+    if not is_server_ready():
+        st.error("Server is not ready yet")
+        st_autorefresh(interval=3000, key="server_check")
+        st.stop()
+                   
     # Main application function
     configure_page()
     apply_custom_css()

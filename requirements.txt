@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 langchain
+langchain-openai
+langchain-community
 PyPDF2  
 pinecone-client
 faiss-cpu
@@ -10,14 +12,10 @@ pytest
 httpx
 python-multipart
 openai
-langchain
-langchain-openai
-langchain-community
-paddleocr 
+paddleocr
 pymupdf
 paddlepaddle
-torch
-torchvision
-open-clip-torch
 ftfy
 regex
+streamlit
+streamlit-autorefresh
