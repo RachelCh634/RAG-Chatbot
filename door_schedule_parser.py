@@ -17,18 +17,23 @@ MATERIAL_PRICES: Dict[str, Dict[str, float]] = {
 LABOR_COST_PERCENTAGE: float = 0.25
 
 def calculate_door_area(size_str: str) -> float:
-    """
-    Calculates the door area in square meters from a dimension string (cm), for example: "90x210" or "90×210".
-    Returns 0.0 if unable to interpret.
-    """
+    """Calculate door area - works with inches or cm"""
     try:
-        size_str = size_str.replace('×', 'x').replace('X', 'x').strip()
-        match = re.match(r'^\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*$', size_str)
+        size_str = size_str.replace('×', 'x').replace('X', 'x').replace('"', '').strip()
+        
+        match = re.search(r'(\d+(?:\.\d+)?)\s*["\']?\s*[xX×]\s*(\d+(?:\.\d+)?)\s*["\']?', size_str)
         if not match:
             logging.warning(f"Could not parse size string: '{size_str}'")
             return 0.0
 
-        width_cm, height_cm = map(float, match.groups())
+        width, height = map(float, match.groups())
+        
+        if width > 10 and height > 10:
+            width_cm = width * 2.54
+            height_cm = height * 2.54
+        else:
+            width_cm, height_cm = width, height
+
         area_sqm = (width_cm / 100) * (height_cm / 100)
         return round(area_sqm, 3)
     except Exception as e:
@@ -36,10 +41,7 @@ def calculate_door_area(size_str: str) -> float:
         return 0.0
 
 def get_material_pricing(material: str) -> Dict[str, float]:
-    """
-    Returns material and installation prices by material type.
-    If not found - returns default prices.
-    """
+    """Returns material and installation prices by material type."""
     material_key = material.lower().strip()
     if material_key in MATERIAL_PRICES:
         return MATERIAL_PRICES[material_key]
@@ -52,10 +54,7 @@ def get_material_pricing(material: str) -> Dict[str, float]:
     return MATERIAL_PRICES["default"]
 
 def calculate_door_cost(door_info: Dict) -> Dict[str, float]:
-    """
-    Calculates cost breakdown by door area and material.
-    Returns a dictionary with material, labor, installation, and total cost.
-    """
+    """Calculates cost breakdown by door area and material."""
     try:
         area_sqm = door_info.get("area_sqm", 0)
         material = door_info.get("material", "default")
@@ -93,91 +92,113 @@ def calculate_door_cost(door_info: Dict) -> Dict[str, float]:
             "error": str(e)
         }
 
+def is_door_line(line: str) -> bool:
+    line_lower = line.lower()
+    door_keywords = ['door', 'entry', 'swing', 'pocket', 'bathroom', 'bedroom', 'closet']
+    window_keywords = ['window', 'sliding', 'single hung', 'vinyl', 'gl', 'glazing', 'egress']
+    has_window_keywords = any(keyword in line_lower for keyword in window_keywords)
+    if has_window_keywords:
+        print(f"Skipping window line: {line[:50]}...")
+        return False
+    
+    has_door_keywords = any(keyword in line_lower for keyword in door_keywords)
+    
+    has_door_id = bool(re.search(r'\b(0[1-9]|[1-9]\d*|D\d+)\b', line))
+    
+    return has_door_keywords or has_door_id
+
 def parse_door_schedule(text: str) -> List[Dict]:
     """
-    Extracts a list of doors from raw OCR text or a report.
-    Searches for a "Door Schedule" section and parses door rows.
-    Returns a list of dictionaries with information and doors including cost calculations.
+    Extract doors only (not windows) from OCR text.
     """
     doors: List[Dict] = []
     try:
-        schedule_patterns = [r'Door\s+Schedule', r'DOOR\s+SCHEDULE', r'דלתות.*לוח', r'לוח.*דלתות']
+        schedule_patterns = [r'Door\s+Schedule', r'DOOR\s+SCHEDULE']
         schedule_start: Optional[int] = None
-        for i, pattern in enumerate(schedule_patterns):
+        
+        for pattern in schedule_patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 schedule_start = match.end()
                 break
-            else:
-                print(f"Pattern {i} not found: '{pattern}'")
 
         if schedule_start is None:
-            door_mentions = re.findall(r'\b[Dd]oor\b', text)
-            print(f"Found {len(door_mentions)} mentions of 'door' in text")
-            logging.warning("Door Schedule section not found in text")
-            return doors
-
-        relevant_text = text[schedule_start:]
+            print("Door Schedule section not found, searching entire text")
+            relevant_text = text
+        else:
+            window_match = re.search(r'Window\s+Schedule|WINDOW\s+SCHEDULE', text[schedule_start:], re.IGNORECASE)
+            if window_match:
+                relevant_text = text[schedule_start:schedule_start + window_match.start()]
+            else:
+                relevant_text = text[schedule_start:]
         
         lines = [line.strip() for line in relevant_text.splitlines() if line.strip()]
 
-        door_row_patterns = [
-            re.compile(r'^(D[-_]?\d+)\s*\|\s*([\d×x*X\s]+)\s*\|\s*([\w\s\-א-ת]+?)\s*\|\s*(.+)?$', re.IGNORECASE),
-            re.compile(r'^([Ddד][-_]?\d+)\s*\|\s*([\d×x*X\s]+)\s*\|\s*([\w\s\-א-ת]+?)\s*\|\s*(.+)?$', re.IGNORECASE),
-            re.compile(r'^(D[-_]?\d+)\s+([\d×x*X\s]+)\s+([\w\s\-א-ת]+?)(?:\s+(.+))?$', re.IGNORECASE),
-            re.compile(r'^([Ddד][-_]?\d+)\s+([\d×x*X\s]+)\s+([\w\s\-א-ת]+?)(?:\s+(.+))?$', re.IGNORECASE)
+        door_patterns = [
+            re.compile(r'^(\d+)\s+([\d"\'×x\s]+)\s+(swing|pocket)\s*(.*)$', re.IGNORECASE),
+            re.compile(r'^(0[1-4])\s+([\d"\'×x\s]+)\s+(swing|pocket)\s*(.*)$', re.IGNORECASE),
+            re.compile(r'^(\w+)\s+([\d"\'×x\s]+)\s+(\w+)\s*(.*)$', re.IGNORECASE)
         ]
 
         for line_num, line in enumerate(lines):
-            
             if (re.match(r'^[=\-_\s]*$', line) or 
-                'door' in line.lower() or 
-                'schedule' in line.lower() or 
-                'door id' in line.lower() or
-                ('size' in line.lower() and 'material' in line.lower())):
+                len(line) < 5 or
+                'count' in line.lower() or
+                'size' in line.lower() and 'operation' in line.lower()):
+                continue
+
+            if not is_door_line(line):
                 continue
 
             door_found = False
-            for pattern_num, pattern in enumerate(door_row_patterns):
+            for pattern_num, pattern in enumerate(door_patterns):
                 match = pattern.match(line)
                 if match:
+                    print(f"Pattern {pattern_num} matched: {line}")
+                    
                     door_id = match.group(1).strip()
                     size = match.group(2).strip()
-                    material = match.group(3).strip()
-                    notes = match.group(4).strip() if match.group(4) else ""
+                    operation = match.group(3).strip()
+                    extra = match.group(4).strip() if len(match.groups()) > 3 else ""
+
+                    material = "wood"  
+                    if "wd" in extra.lower():
+                        material = "wooden"
+                    elif "metal" in extra.lower():
+                        material = "metal"
+                    elif "glass" in extra.lower():
+                        material = "glass"
 
                     area = calculate_door_area(size)
                     if area > 0:
                         door_info = {
                             "door_id": door_id,
                             "size": size,
+                            "operation": operation,
                             "material": material,
-                            "notes": notes,
+                            "notes": extra,
                             "area_sqm": area
                         }
                         cost_breakdown = calculate_door_cost(door_info)
                         door_info["cost_breakdown"] = cost_breakdown
 
                         doors.append(door_info)
-                    else:
-                        print(f"Skipped door {door_id} due to invalid area")
+                        print(f"Added door: {door_id} - {size} - {material}")
+                    
                     door_found = True
                     break
-                else:
-                    print(f"Pattern {pattern_num} did not match")
-                    
-            if not door_found and len(line) > 10:
-                logging.info(f"Could not parse potential door line: {line}")
+
+            if not door_found:
+                print(f"No pattern matched for line: {line}")
 
     except Exception as e:
         logging.error(f"Error parsing door schedule: {e}")
     
+    print(f"Found {len(doors)} doors total")
     return doors
 
 def generate_door_summary(doors: List[Dict]) -> Dict:
-    """
-    Creates a total summary of doors with costs and totals by material. 
-    """
+    """Creates a total summary of doors with costs and totals by material."""
     if not doors:
         return {"total_doors": 0, "total_cost": 0, "total_area": 0}
 
@@ -205,9 +226,7 @@ def generate_door_summary(doors: List[Dict]) -> Dict:
     return summary
 
 def create_door_embeddings_text(doors: List[Dict]) -> List[str]:
-    """
-    Converts door information into texts suitable for indexing in a RAG or vector DB.
-    """
+    """Converts door information into texts suitable for indexing in a RAG or vector DB."""
     door_texts: List[str] = []
     for i, door in enumerate(doors):
         cost = door.get("cost_breakdown", {})
