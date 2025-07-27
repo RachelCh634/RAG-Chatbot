@@ -62,14 +62,14 @@ class AIService:
     def _setup_chains(self):
         self.qa_template = """You are a helpful assistant specialized in construction and architectural documents.
 Use the following context to answer the question accurately and concisely.
-
+Give short and clear answers without unnecessary detail!!!
 Context:
 {context}
 
 Question: {question}
 
 Instructions:
-- Give a direct, clear answer (2-3 sentences maximum)
+- Give a direct, clear answer (2-3 sentences maximum)!!!!!!
 - Only use information from the provided context
 - Be specific about doors, windows, measurements, and costs
 - If you don't know the answer from the context, say so clearly

@@ -19,3 +19,4 @@ ftfy
 regex
 streamlit
 streamlit-autorefresh
+tavily-python

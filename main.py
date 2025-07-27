@@ -3,7 +3,7 @@ from models import ChatRequest, ChatResponse
 from pdf_processor import PDFProcessor
 from vector_service import VectorService
 from ai_service import AIService  
-from door_schedule_parser import parse_door_schedule, create_door_embeddings_text, generate_door_summary
+from door_schedule_parser import parse_door_schedule_enhanced, create_enhanced_door_embeddings_text
 
 app = FastAPI(title="PDF RAG API", description="API for PDF processing and Q&A")
 
@@ -26,10 +26,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         elif full_text is None:
             full_text = ""
         
-        doors = parse_door_schedule(full_text)
-        door_summary = generate_door_summary(doors) if doors else None
+        door_result = parse_door_schedule_enhanced(full_text)
+        doors = door_result.get("doors", [])
+        door_summary = door_result.get("summary", {})
+        
         if doors:
-            door_embeddings = create_door_embeddings_text(doors)
+            door_embeddings = create_enhanced_door_embeddings_text(doors)
             combined_text = full_text + "\n\n" + "\n".join(door_embeddings)
         else:
             combined_text = full_text
@@ -46,7 +48,9 @@ async def upload_pdf(file: UploadFile = File(...)):
             "upload_success": result.get("upload_success", True),
             "doors_found": len(doors),
             "door_summary": door_summary,
-            "doors": doors[:5] if doors else []  
+            "doors": doors[:5] if doors else [],  
+            "enhanced_pricing": door_result.get("enhanced_pricing", False),
+            "pricing_sources": door_summary.get("pricing_sources", {}) 
         }
         
     except HTTPException:
