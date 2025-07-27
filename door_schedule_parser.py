@@ -17,7 +17,7 @@ MATERIAL_PRICES: Dict[str, Dict[str, float]] = {
 LABOR_COST_PERCENTAGE: float = 0.25
 
 def calculate_door_area(size_str: str) -> float:
-    """Calculate door area - works with inches or cm"""
+    """Calculate door area - assumes measurements are in centimeters"""
     try:
         size_str = size_str.replace('×', 'x').replace('X', 'x').replace('"', '').strip()
         
@@ -28,7 +28,7 @@ def calculate_door_area(size_str: str) -> float:
 
         width, height = map(float, match.groups())
         
-        if width > 10 and height > 10:
+        if width < 50 and height < 50:
             width_cm = width * 2.54
             height_cm = height * 2.54
         else:

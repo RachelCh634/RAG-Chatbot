@@ -4,7 +4,6 @@ from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_core.output_parsers import StrOutputParser
 from typing import List, Dict, Optional
-import time
 from config import Config
 
 class LangChainVectorStore(VectorStore):

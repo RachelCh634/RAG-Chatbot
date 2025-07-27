@@ -26,11 +26,25 @@ class VectorService:
         )
         self.tokenizer = open_clip.get_tokenizer(model_name)
         
-        # Get the dimension from the model
-        with torch.no_grad():
-            sample_text = self.tokenizer(["test"])
-            sample_features = self.model.encode_text(sample_text.to(self.device))
-            self.dimension = sample_features.shape[-1]
+        try:
+            with torch.no_grad():
+                sample_text = self.tokenizer(["test"])
+                sample_features = self.model.encode_text(sample_text.to(self.device))
+                
+                if hasattr(sample_features, 'shape'):
+                    self.dimension = sample_features.shape[-1]
+                else:
+                    print("Warning: Could not determine dimension from model, using default")
+                    self.dimension = 512
+        except Exception as e:
+            print(f"Error determining model dimension: {e}")
+            if "ViT-B-32" in model_name:
+                self.dimension = 512
+            elif "ViT-L-14" in model_name:
+                self.dimension = 768
+            else:
+                self.dimension = 512  
+            print(f"Using default dimension: {self.dimension}")
         
         print(f"Model: {model_name}, Embedding dimension: {self.dimension}")
         
@@ -85,12 +99,20 @@ class VectorService:
     
     def preprocess_text(self, text: str) -> str:
         """Lightweight preprocessing"""
+        if not text:
+            return ""
         text = re.sub(r'\s+', ' ', text.strip())
         return text
     
     def split_text_into_chunks(self, text: str, chunk_size: int = 300, overlap: int = 50) -> List[str]:
         """Faster chunking with simpler logic"""
+        if not text or not text.strip():
+            return []
+            
         words = text.split()
+        if len(words) <= chunk_size:
+            return [text]
+            
         chunks = []
         
         for i in range(0, len(words), chunk_size - overlap):
@@ -102,11 +124,13 @@ class VectorService:
     
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Create embeddings using OpenCLIP with caching"""
+        if not texts:
+            return []
+            
         embeddings = []
         texts_to_encode = []
         cache_indices = []
         
-        # Check cache first
         for i, text in enumerate(texts):
             if text in self.embedding_cache:
                 embeddings.append(self.embedding_cache[text])
@@ -115,7 +139,7 @@ class VectorService:
                 texts_to_encode.append(text)
         
         if texts_to_encode:
-            batch_size = 32  # Adjust based on your GPU memory
+            batch_size = 32  
             new_embeddings = []
             
             self.model.eval()
@@ -123,24 +147,24 @@ class VectorService:
                 for i in range(0, len(texts_to_encode), batch_size):
                     batch = texts_to_encode[i:i + batch_size]
                     
-                    # Tokenize batch
-                    tokens = self.tokenizer(batch).to(self.device)
-                    
-                    # Get embeddings
-                    batch_embeddings = self.model.encode_text(tokens)
-                    
-                    # Normalize embeddings (important for CLIP)
-                    batch_embeddings = torch.nn.functional.normalize(batch_embeddings, dim=-1)
-                    
-                    # Convert to CPU and numpy
-                    batch_embeddings = batch_embeddings.cpu().numpy()
-                    new_embeddings.extend(batch_embeddings)
+                    try:
+                        tokens = self.tokenizer(batch).to(self.device)
+                        
+                        batch_embeddings = self.model.encode_text(tokens)
+                        
+                        batch_embeddings = torch.nn.functional.normalize(batch_embeddings, dim=-1)
+                        
+                        batch_embeddings = batch_embeddings.cpu().numpy()
+                        new_embeddings.extend(batch_embeddings)
+                        
+                    except Exception as e:
+                        print(f"Error creating embeddings for batch: {e}")
+                        for _ in batch:
+                            new_embeddings.append([0.0] * self.dimension)
             
-            # Cache new embeddings
             for text, embedding in zip(texts_to_encode, new_embeddings):
                 self.embedding_cache[text] = embedding.tolist()
             
-            # Insert new embeddings in correct positions
             text_idx = 0
             for i, text in enumerate(texts):
                 if i not in cache_indices:
@@ -153,8 +177,22 @@ class VectorService:
         """Store vectors with Pinecone fallback to JSON"""
         print(f"Processing: {filename}")
         
+        if not full_text or not full_text.strip():
+            return {
+                "status": "error",
+                "message": "Empty text provided",
+                "filename": filename
+            }
+        
         chunks = self.split_text_into_chunks(full_text)
         print(f"Created {len(chunks)} chunks")
+        
+        if not chunks:
+            return {
+                "status": "error",
+                "message": "No chunks created from text",
+                "filename": filename
+            }
         
         embeddings = self.create_embeddings(chunks)
         print(f"Created {len(embeddings)} embeddings")
@@ -280,6 +318,9 @@ class VectorService:
     
     def search_vectors(self, query: str, top_k: int = 5, max_retries: int = 3) -> List[Dict[str, Any]]:
         """Search with retry logic for consistency issues"""
+        if not query or not query.strip():
+            return []
+            
         print(f"Searching for: '{query}'")
         
         if self.pinecone_available:
@@ -290,7 +331,6 @@ class VectorService:
                     if results or attempt == max_retries - 1:
                         return results
                     
-                    # If no results found, retry after short wait
                     print(f"No results on attempt {attempt + 1}, retrying...")
                     time.sleep(2)
                     
@@ -305,7 +345,6 @@ class VectorService:
     def _search_pinecone(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """Search vectors in Pinecone with consistency check"""
         
-        # Quick index status check
         try:
             stats = self.index.describe_index_stats()
             vector_count = stats.get('total_vector_count', 0)
@@ -319,17 +358,20 @@ class VectorService:
         except Exception as e:
             print(f"Could not check index stats: {e}")
         
-        # Get query embedding using OpenCLIP
         if query in self.embedding_cache:
             query_embedding = self.embedding_cache[query]
         else:
-            self.model.eval()
-            with torch.no_grad():
-                tokens = self.tokenizer([query]).to(self.device)
-                query_features = self.model.encode_text(tokens)
-                query_features = torch.nn.functional.normalize(query_features, dim=-1)
-                query_embedding = query_features.cpu().numpy()[0].tolist()
-                self.embedding_cache[query] = query_embedding
+            try:
+                self.model.eval()
+                with torch.no_grad():
+                    tokens = self.tokenizer([query]).to(self.device)
+                    query_features = self.model.encode_text(tokens)
+                    query_features = torch.nn.functional.normalize(query_features, dim=-1)
+                    query_embedding = query_features.cpu().numpy()[0].tolist()
+                    self.embedding_cache[query] = query_embedding
+            except Exception as e:
+                print(f"Error creating query embedding: {e}")
+                return []
         
         results = self.index.query(
             vector=query_embedding,
@@ -363,22 +405,24 @@ class VectorService:
             if not vectors:
                 return []
             
-            # Get query embedding using OpenCLIP
             if query in self.embedding_cache:
                 query_embedding = self.embedding_cache[query]
             else:
-                self.model.eval()
-                with torch.no_grad():
-                    tokens = self.tokenizer([query]).to(self.device)
-                    query_features = self.model.encode_text(tokens)
-                    query_features = torch.nn.functional.normalize(query_features, dim=-1)
-                    query_embedding = query_features.cpu().numpy()[0].tolist()
-                    self.embedding_cache[query] = query_embedding
+                try:
+                    self.model.eval()
+                    with torch.no_grad():
+                        tokens = self.tokenizer([query]).to(self.device)
+                        query_features = self.model.encode_text(tokens)
+                        query_features = torch.nn.functional.normalize(query_features, dim=-1)
+                        query_embedding = query_features.cpu().numpy()[0].tolist()
+                        self.embedding_cache[query] = query_embedding
+                except Exception as e:
+                    print(f"Error creating query embedding: {e}")
+                    return []
             
             query_vec = np.array(query_embedding)
             vector_embeddings = np.array([v['values'] for v in vectors])
             
-            # Since we're using normalized vectors, we can use dot product directly
             similarities = np.dot(vector_embeddings, query_vec)
             
             top_indices = np.argsort(similarities)[-top_k:][::-1]
@@ -402,13 +446,17 @@ class VectorService:
     
     def _find_latest_backup_file(self) -> Optional[str]:
         """Find the latest backup file"""
-        backup_files = [f for f in os.listdir('.') 
-        if f.startswith('vectors_backup_') and f.endswith('.json')]
-        
-        if not backup_files:
+        try:
+            backup_files = [f for f in os.listdir('.') 
+            if f.startswith('vectors_backup_') and f.endswith('.json')]
+            
+            if not backup_files:
+                return None
+            
+            return max(backup_files, key=lambda x: os.path.getctime(x))
+        except Exception as e:
+            print(f"Error finding backup files: {e}")
             return None
-        
-        return max(backup_files, key=lambda x: os.path.getctime(x))
     
     def _load_vectors_from_json(self, json_file: str) -> List[Dict]:
         """Load vectors from JSON file"""
@@ -440,15 +488,18 @@ class VectorService:
             except Exception as e:
                 print(f"Failed to clear Pinecone: {e}")
         
-        backup_files = [f for f in os.listdir('.') 
-        if f.startswith('vectors_backup_') and f.endswith('.json')]
-        
-        for file in backup_files:
-            try:
-                os.remove(file)
-                print(f"Removed {file}")
-            except Exception as e:
-                print(f"Failed to remove {file}: {e}")
+        try:
+            backup_files = [f for f in os.listdir('.') 
+            if f.startswith('vectors_backup_') and f.endswith('.json')]
+            
+            for file in backup_files:
+                try:
+                    os.remove(file)
+                    print(f"Removed {file}")
+                except Exception as e:
+                    print(f"Failed to remove {file}: {e}")
+        except Exception as e:
+            print(f"Error accessing backup files: {e}")
         
         self.clear_cache()
         print("All vectors cleared!")
