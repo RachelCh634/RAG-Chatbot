@@ -15,7 +15,6 @@ class VectorService:
     """Optimized Vector Management Service with Pinecone and JSON fallback using OpenCLIP"""
     
     def __init__(self, model_name: str = "ViT-B-32", pretrained: str = "openai"):
-        # Initialize OpenCLIP model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
         
@@ -207,7 +206,7 @@ class VectorService:
         return self._store_vectors_json(filename, chunks, embeddings, metadata)
     
     def _store_vectors_pinecone(self, filename: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Store vectors in Pinecone with consistency checking"""
+        """Store vectors in Pinecone - streamlined without consistency checking"""
         vectors_to_upsert = []
         
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -234,42 +233,16 @@ class VectorService:
             batch = vectors_to_upsert[i:i + batch_size]
             self.index.upsert(vectors=batch)
         
-        print(f"Uploaded {len(vectors_to_upsert)} vectors to Pinecone")
-        
-        self._wait_for_consistency(expected_count=len(vectors_to_upsert))
+        print(f"Successfully uploaded {len(vectors_to_upsert)} vectors to Pinecone")
         
         return {
             "status": "success",
-            "message": "PDF processed and stored in Pinecone (synced)",
+            "message": "PDF processed and stored in Pinecone",
             "filename": filename,
             "chunks_stored": len(chunks),
             "total_vectors": len(vectors_to_upsert),
             "storage_method": "pinecone"
         }
-    
-    def _wait_for_consistency(self, expected_count: int, max_wait: int = 30):
-        """Wait for Pinecone to sync the vectors"""
-        print("Waiting for Pinecone consistency...")
-        
-        for attempt in range(max_wait):
-            try:
-                stats = self.index.describe_index_stats()
-                current_count = stats.get('total_vector_count', 0)
-                
-                print(f"Attempt {attempt + 1}: {current_count} vectors in index")
-                
-                if current_count >= expected_count:
-                    print("Pinecone synced successfully!")
-                    return True
-                    
-                time.sleep(1)
-                
-            except Exception as e:
-                print(f"Consistency check failed: {e}")
-                time.sleep(1)
-        
-        print("Consistency check timed out, but vectors might still be syncing")
-        return False
     
     def _store_vectors_json(self, filename: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """Store vectors in JSON file"""
@@ -316,45 +289,29 @@ class VectorService:
             "backup_file": backup_file
         }
     
-    def search_vectors(self, query: str, top_k: int = 5, max_retries: int = 3) -> List[Dict[str, Any]]:
-        """Search with retry logic for consistency issues"""
+    def search_vectors(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Simplified search without excessive retries"""
         if not query or not query.strip():
             return []
             
         print(f"Searching for: '{query}'")
         
         if self.pinecone_available:
-            for attempt in range(max_retries):
-                try:
-                    results = self._search_pinecone(query, top_k)
-                    
-                    if results or attempt == max_retries - 1:
-                        return results
-                    
-                    print(f"No results on attempt {attempt + 1}, retrying...")
-                    time.sleep(2)
-                    
-                except Exception as e:
-                    print(f"Pinecone search failed on attempt {attempt + 1}: {e}")
-                    if attempt == max_retries - 1:
-                        print("Falling back to JSON search...")
-                        return self._search_json_vectors(query, top_k)
+            try:
+                return self._search_pinecone(query, top_k)
+            except Exception as e:
+                print(f"Pinecone search failed: {e}, trying JSON backup...")
+                return self._search_json_vectors(query, top_k)
         
         return self._search_json_vectors(query, top_k)
     
     def _search_pinecone(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """Search vectors in Pinecone with consistency check"""
+        """Search vectors in Pinecone - simplified"""
         
         try:
             stats = self.index.describe_index_stats()
             vector_count = stats.get('total_vector_count', 0)
-            
-            if vector_count == 0:
-                print("Index appears empty, might be consistency issue")
-                return []
-                
-            print(f"Index contains {vector_count} vectors")
-            
+            print(f"Searching in index with {vector_count} vectors")
         except Exception as e:
             print(f"Could not check index stats: {e}")
         

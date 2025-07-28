@@ -622,7 +622,6 @@ def main():
         st_autorefresh(interval=3000, key="server_check")
         st.stop()
                    
-    """Main application function"""
     configure_page()
     apply_custom_css()
     initialize_session_state()

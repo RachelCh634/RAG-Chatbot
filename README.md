@@ -45,6 +45,7 @@ This project is a RAG-based intelligent chatbot that extracts door and window sc
 ```env
 PINECONE_API_KEY=your_pinecone_key
 OPENROUTER_API_KEY=your_openrouter_key
+TAVILY_API_KEY=your_tavily_key
 ```
 
 ### 2. Build and run the project

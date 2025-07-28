@@ -12,15 +12,15 @@ except ImportError:
     print("Warning: tavily-python not installed. Install with: pip install tavily-python")
 
 MATERIAL_PRICES: Dict[str, Dict[str, float]] = {
-    "wood": {"price_per_sqm": 800, "installation": 200},
-    "wooden": {"price_per_sqm": 800, "installation": 200},
-    "metal": {"price_per_sqm": 1200, "installation": 300},
-    "steel": {"price_per_sqm": 1200, "installation": 300},
-    "glass": {"price_per_sqm": 1500, "installation": 400},
-    "aluminum": {"price_per_sqm": 1000, "installation": 250},
-    "pvc": {"price_per_sqm": 600, "installation": 150},
-    "composite": {"price_per_sqm": 900, "installation": 220},
-    "default": {"price_per_sqm": 1000, "installation": 250}
+    "wood": {"price_per_sqm": 120, "installation": 50},
+    "wooden": {"price_per_sqm": 120, "installation": 50},
+    "metal": {"price_per_sqm": 180, "installation": 75},
+    "steel": {"price_per_sqm": 180, "installation": 75},
+    "glass": {"price_per_sqm": 225, "installation": 100},
+    "aluminum": {"price_per_sqm": 150, "installation": 60},
+    "pvc": {"price_per_sqm": 90, "installation": 40},
+    "composite": {"price_per_sqm": 135, "installation": 55},
+    "default": {"price_per_sqm": 150, "installation": 60}
 }
 
 LABOR_COST_PERCENTAGE: float = 0.25
@@ -28,7 +28,7 @@ LABOR_COST_PERCENTAGE: float = 0.25
 class TavilyPriceSearcher:
     """Handle price searches using Tavily API"""
     
-    def __init__(self, api_key: str = None, region: str = "israel"):
+    def __init__(self, api_key: str = None, region: str = "usa"):  
         if api_key is None:
             api_key = os.getenv('TAVILY_API_KEY')
             if api_key:
@@ -64,8 +64,10 @@ class TavilyPriceSearcher:
             return self.price_cache[cache_key]
         
         try:
-            if self.region.lower() == "israel":
+            if self.region.lower() in ["israel"]:
                 query = f"{material} door prices Israel 2025 cost per square meter installation NIS shekel"
+            elif self.region.lower() in ["usa", "us", "united states"]:
+                query = f"{material} door prices USA 2025 cost per square meter installation USD dollars"
             else:
                 query = f"{material} door prices {self.region} 2025 cost per square meter installation"
             
@@ -116,6 +118,7 @@ class TavilyPriceSearcher:
                 r'[₪\$]?(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:per\s*(?:sq\.?m|square\s*meter|m²|מ״ר))',
                 r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*[₪\$]\s*(?:per\s*(?:sq\.?m|square\s*meter|m²|מ״ר))',
                 r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:ש״ח|שקל)\s*(?:למ״ר|למטר)',
+                r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:usd|dollars?)\s*(?:per\s*(?:sq\.?m|square\s*meter|m²))',
             ]
             
             for pattern in price_patterns:
@@ -123,7 +126,7 @@ class TavilyPriceSearcher:
                 for match in matches:
                     try:
                         price = float(match.group(1).replace(',', ''))
-                        if 100 <= price <= 5000:
+                        if 50 <= price <= 1000:
                             prices_per_sqm.append(price)
                             extracted_info["prices_found"].append({
                                 "price": price,
@@ -136,6 +139,7 @@ class TavilyPriceSearcher:
             install_patterns = [
                 r'installation[:\s]+[₪\$]?(\d+(?:,\d{3})*(?:\.\d{2})?)',
                 r'התקנה[:\s]+(\d+(?:,\d{3})*(?:\.\d{2})?)\s*[₪שש״ח]',
+                r'install[:\s]+(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:usd|dollars?)',
             ]
             
             for pattern in install_patterns:
@@ -143,7 +147,7 @@ class TavilyPriceSearcher:
                 for match in matches:
                     try:
                         cost = float(match.group(1).replace(',', ''))
-                        if 50 <= cost <= 1000:
+                        if 25 <= cost <= 500:
                             installation_costs.append(cost)
                     except ValueError:
                         continue
@@ -174,7 +178,7 @@ class TavilyPriceSearcher:
             
             pricing = {
                 "price_per_sqm": search_result["average_price_per_sqm"],
-                "installation": search_result.get("average_installation", 250),
+                "installation": search_result.get("average_installation", 60),  
                 "source": "tavily_enhanced",
                 "confidence": search_result["confidence"],
                 "last_updated": search_result.get("search_timestamp"),
@@ -184,7 +188,8 @@ class TavilyPriceSearcher:
                 "search_query": search_result.get("search_query", "")
             }
             
-            print(f"Using Tavily pricing for {material}: ₪{pricing['price_per_sqm']}/sqm")
+            currency_symbol = "$" if self.region.lower() in ["usa", "us", "united states"] else "₪"
+            print(f"Using Tavily pricing for {material}: {currency_symbol}{pricing['price_per_sqm']}/sqm")
             return pricing
         
         else:
@@ -370,7 +375,7 @@ def is_door_line(line: str) -> bool:
     
     return is_door
 
-def parse_door_schedule_enhanced(text: str, tavily_api_key: str = None, region: str = "israel") -> Dict[str, Any]:
+def parse_door_schedule_enhanced(text: str, tavily_api_key: str = None, region: str = "usa") -> Dict[str, Any]:
     """
     Enhanced door schedule parser with better window filtering and price source tracking
     """
@@ -445,7 +450,8 @@ def parse_door_schedule_enhanced(text: str, tavily_api_key: str = None, region: 
                         doors.append(door_info)
                         
                         pricing_info = "enhanced" if price_searcher else "standard"
-                        print(f"Added door: {door_id} - {size} - {material} ({pricing_info} pricing)")
+                        currency = "$" if region.lower() in ["usa", "us", "united states"] else "₪"
+                        print(f"Added door: {door_id} - {size} - {material} ({pricing_info} pricing in {currency})")
                     
                     door_found = True
                     break
@@ -458,7 +464,7 @@ def parse_door_schedule_enhanced(text: str, tavily_api_key: str = None, region: 
     
     print(f"Found {len(doors)} doors total (windows completely excluded)")
     
-    summary = generate_enhanced_door_summary(doors, price_searcher is not None)
+    summary = generate_enhanced_door_summary(doors, price_searcher is not None, region)
     
     return {
         "doors": doors,
@@ -466,10 +472,12 @@ def parse_door_schedule_enhanced(text: str, tavily_api_key: str = None, region: 
         "enhanced_pricing": price_searcher is not None,
         "processed_timestamp": datetime.now().isoformat(),
         "windows_excluded": True,  
-        "door_section_only": True  
+        "door_section_only": True,
+        "region": region,
+        "currency": "$" if region.lower() in ["usa", "us", "united states"] else "₪"
     }
 
-def generate_enhanced_door_summary(doors: List[Dict], is_enhanced: bool = False) -> Dict:
+def generate_enhanced_door_summary(doors: List[Dict], is_enhanced: bool = False, region: str = "usa") -> Dict:
     """Creates enhanced summary with detailed pricing source information"""
     if not doors:
         return {"total_doors": 0, "total_cost": 0, "total_area": 0}
@@ -507,6 +515,8 @@ def generate_enhanced_door_summary(doors: List[Dict], is_enhanced: bool = False)
         if detailed_sources:
             all_pricing_sources.extend(detailed_sources)
 
+    currency = "$" if region.lower() in ["usa", "us", "united states"] else "₪"
+    
     summary = {
         "total_doors": len(doors),
         "total_cost": round(total_cost, 2),
@@ -517,7 +527,9 @@ def generate_enhanced_door_summary(doors: List[Dict], is_enhanced: bool = False)
         "pricing_enhanced": is_enhanced,
         "pricing_sources": pricing_sources,
         "detailed_pricing_sources": all_pricing_sources,  
-        "unique_source_urls": list(set([source.get("url", "") for source in all_pricing_sources if source.get("url")]))
+        "unique_source_urls": list(set([source.get("url", "") for source in all_pricing_sources if source.get("url")])),
+        "region": region,
+        "currency": currency
     }
     
     return summary

@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from config import Config
 from paddleocr import PaddleOCR
 import signal
-import multiprocessing as mp
 from concurrent.futures import TimeoutError
 
 class PDFProcessor:
@@ -79,6 +78,123 @@ class PDFProcessor:
                 detail=f"Error processing PDF: {str(e)}"
             )
 
+    def pdf_has_images(self, file_content: bytes) -> bool:
+        """Check if PDF contains images using PyMuPDF"""
+        try:
+            import fitz 
+        except ImportError:
+            print("PyMuPDF not available - assuming NO images exist (will check text quality)")
+            return False 
+
+        try:
+            pdf_file = io.BytesIO(file_content)
+            doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+            
+            has_images = False
+            max_pages_to_check = min(5, len(doc))
+            print(f"Checking {max_pages_to_check} pages for images...")
+            
+            for page_num in range(max_pages_to_check):
+                page = doc.load_page(page_num)
+                image_list = page.get_images(full=False)
+                
+                if image_list:
+                    print(f"Found {len(image_list)} images on page {page_num + 1}")
+                    has_images = True
+                    break
+                else:
+                    print(f"No images found on page {page_num + 1}")
+                    
+                drawings = page.get_drawings()
+                if drawings:
+                    significant_drawings = [d for d in drawings if len(d.get('items', [])) > 5]
+                    if significant_drawings:
+                        print(f"Found {len(significant_drawings)} significant drawings on page {page_num + 1}")
+                        has_images = True
+                        break
+                    else:
+                        print(f"Found {len(drawings)} simple drawings (likely borders/lines) on page {page_num + 1}")
+
+            doc.close()
+            print(f"[IMAGE CHECK] PDF contains images: {has_images}")
+            return has_images
+            
+        except Exception as e:
+            print(f"Error checking for images: {e}")
+            import traceback
+            traceback.print_exc()
+            print("Assuming NO images exist due to error (will rely on text quality check)")
+            return False  
+
+    def check_text_quality(self, text: str, num_pages: int) -> dict:
+        """Analyze text quality to determine if OCR is needed"""
+        if not text or len(text.strip()) < 50:
+            return {
+                'quality': 'poor',
+                'reason': 'insufficient_text',
+                'needs_ocr': True
+            }
+        
+        words = text.split()
+        words_per_page = len(words) / num_pages if num_pages > 0 else 0
+        
+        if words_per_page < 20:
+            return {
+                'quality': 'poor',
+                'reason': 'too_few_words_per_page',
+                'needs_ocr': True
+            }
+        
+        special_chars = sum(1 for c in text if not c.isalnum() and c not in ' \n\t.,!?-()[]{}":;\'')
+        special_char_ratio = special_chars / len(text) if len(text) > 0 else 0
+        
+        if special_char_ratio > 0.3:
+            return {
+                'quality': 'poor',
+                'reason': 'too_many_special_chars',
+                'needs_ocr': True
+            }
+        
+        if len(set(text.replace(' ', '').replace('\n', ''))) < 10:
+            return {
+                'quality': 'poor',
+                'reason': 'repetitive_chars',
+                'needs_ocr': True
+            }
+        
+        return {
+            'quality': 'good',
+            'reason': 'text_extracted_successfully',
+            'needs_ocr': False
+        }
+
+    def should_use_ocr(self, pdf_text: str, num_pages: int, has_images: bool, force_ocr: bool = False) -> dict:
+        """Enhanced logic to determine if OCR is needed"""
+        
+        if force_ocr:
+            return {
+                'use_ocr': True,
+                'reason': 'forced_by_user'
+            }
+        
+        if has_images:
+            return {
+                'use_ocr': True,
+                'reason': 'has_images_always_run_ocr'
+            }
+        
+        text_quality = self.check_text_quality(pdf_text, num_pages)
+        if not text_quality['needs_ocr']:
+            return {
+                'use_ocr': False,
+                'reason': f'no_images_and_good_text_quality: {text_quality["reason"]}'
+            }
+        else:
+            return {
+                'use_ocr': True,
+                'reason': f'no_images_but_poor_text: {text_quality["reason"]}'
+            }
+
     def resize_image_if_needed(self, img: Image.Image, max_dimension: int = 1200) -> Image.Image:
         """Resize image if it's too large while maintaining aspect ratio"""
         width, height = img.size
@@ -107,7 +223,7 @@ class PDFProcessor:
             signal.alarm(30)  
             
             try:
-                ocr_result = self.ocr.ocr(img_array, cls=True)
+                ocr_result = self.ocr.ocr(img_array)
                 signal.alarm(0)  
             except Exception as e:
                 signal.alarm(0)
@@ -144,7 +260,7 @@ class PDFProcessor:
             print(f"Error processing page {page_num + 1}: {e}")
             return ""
 
-    def extract_text_with_ocr(self, file_content: bytes, max_pages: int = 20) -> str:
+    def extract_text_with_ocr(self, file_content: bytes, max_pages: int = 10) -> str:
         """Run OCR on PDF pages with optimizations for speed"""
         try:
             import fitz 
@@ -159,103 +275,34 @@ class PDFProcessor:
             doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
             
             num_pages = min(len(doc), max_pages)
-            print(f"Processing {num_pages} pages with OCR (limited for speed)")
+            print(f"Processing {num_pages} pages with OCR (max {max_pages} for speed)")
             
             ocr_text = ""
             for page_num in range(num_pages):
+                print(f"Starting OCR on page {page_num + 1}/{num_pages}")
                 page = doc.load_page(page_num)
-                zoom_matrix = fitz.Matrix(1.2, 1.2)  
+                
+                zoom_matrix = fitz.Matrix(1.0, 1.0)  
                 pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
 
                 img_bytes = pix.tobytes("png")
                 img = Image.open(io.BytesIO(img_bytes))
-                img = self.resize_image_if_needed(img, max_dimension=800)
                 
+                img = self.resize_image_if_needed(img, max_dimension=600)
                 img_array = np.array(img)
                 
                 try:
-                    print(f"Running OCR on image size: {img_array.shape}")
-                    ocr_result = self.ocr.ocr(img_array)
-                    print(f"OCR result type: {type(ocr_result)}")
+                    print(f"Running OCR on page {page_num + 1}, image size: {img_array.shape}")
                     
-                    page_text = ""
-                    if ocr_result:
-                        if isinstance(ocr_result, list) and len(ocr_result) > 0:
-                            print(f"OCR result length: {len(ocr_result)}")
-                            
-                            if len(ocr_result) == 1 and isinstance(ocr_result[0], dict):
-                                result_dict = ocr_result[0]
-                                print(f"Dictionary keys: {result_dict.keys()}")
-                                
-                                if 'rec_texts' in result_dict and 'rec_scores' in result_dict:
-                                    texts = result_dict['rec_texts']
-                                    scores = result_dict['rec_scores']
-                                    print(f"Found {len(texts)} text items")
-                                    
-                                    for text, score in zip(texts, scores):
-                                        if score > 0.3 and text.strip(): 
-                                            print(f"Adding text: '{text}' (score: {score:.3f})")
-                                            page_text += text + " "
-                                        else:
-                                            print(f"Skipping: '{text}' (score: {score:.3f})")
-                                    page_text += "\n"
-                            
-                            else:
-                                for block_idx, result_block in enumerate(ocr_result):
-                                    print(f"Block {block_idx}: {type(result_block)}")
-                                    if result_block is None:
-                                        print(f"Block {block_idx} is None")
-                                        continue
-                                        
-                                    if isinstance(result_block, dict):
-                                        print(f"Block {block_idx} is dict: {result_block.keys()}")
-                                        if 'rec_texts' in result_block and 'rec_scores' in result_block:
-                                            texts = result_block['rec_texts']
-                                            scores = result_block['rec_scores']
-                                            for text, score in zip(texts, scores):
-                                                if score > 0.3 and text.strip():
-                                                    page_text += text + " "
-                                            page_text += "\n"
-                                        elif 'text' in result_block:
-                                            page_text += result_block['text'] + " "
-                                    
-                                    elif isinstance(result_block, list):
-                                        print(f"Block {block_idx} has {len(result_block)} lines")
-                                        for line_idx, line in enumerate(result_block):
-                                            if line and len(line) >= 2:
-                                                if isinstance(line[1], list) and len(line[1]) >= 2:
-                                                    text = line[1][0]
-                                                    confidence = line[1][1]
-                                                    if confidence > 0.3 and text.strip():
-                                                        page_text += text + " "
-                                                elif isinstance(line[1], str):
-                                                    page_text += line[1] + " "
-                                        page_text += "\n"
-                        
-                        elif isinstance(ocr_result, dict):
-                            print("OCR result is direct dictionary")
-                            if 'rec_texts' in ocr_result and 'rec_scores' in ocr_result:
-                                texts = ocr_result['rec_texts']
-                                scores = ocr_result['rec_scores']
-                                print(f"Found {len(texts)} text items")
-                                
-                                for text, score in zip(texts, scores):
-                                    if score > 0.3 and text.strip():
-                                        print(f"Adding text: '{text}' (score: {score:.3f})")
-                                        page_text += text + " "
-                                    else:
-                                        print(f"Skipping: '{text}' (score: {score:.3f})")
-                                page_text += "\n"
+                    ocr_result = self.ocr.ocr(img_array)  
                     
-                    print(f"Final page_text length: {len(page_text)}")
-                    print(f"Page text preview: '{page_text[:200]}'")
+                    page_text = self._process_ocr_result(ocr_result)
                     ocr_text += page_text
-                    print(f"Page {page_num + 1}: {len(page_text)} chars")
+                    
+                    print(f"Page {page_num + 1} completed: {len(page_text)} chars extracted")
                     
                 except Exception as e:
                     print(f"OCR failed for page {page_num + 1}: {e}")
-                    import traceback
-                    traceback.print_exc()
                     continue
 
             doc.close()
@@ -266,23 +313,55 @@ class PDFProcessor:
             print(f"OCR processing failed: {str(e)}")
             return ""
 
-    def should_use_ocr(self, pdf_text: str, num_pages: int) -> bool:
-        """Determine if OCR is needed based on extracted text quality"""
-        if not pdf_text or len(pdf_text.strip()) < 50:
-            return True
+    def _process_ocr_result(self, ocr_result) -> str:
+        """Process OCR result efficiently without debug prints"""
+        page_text = ""
         
-        words = pdf_text.split()
-        if len(words) < num_pages * 10: 
-            return True
-        
-        special_chars = sum(1 for c in pdf_text if not c.isalnum() and c not in ' \n\t.,!?-()[]{}":;')
-        if special_chars > len(pdf_text) * 0.3:  
-            return True
+        if not ocr_result:
+            return page_text
             
-        return False
+        try:
+            if isinstance(ocr_result, list) and len(ocr_result) > 0:
+                for result_block in ocr_result:
+                    if result_block is None:
+                        continue
+                        
+                    if isinstance(result_block, list):
+                        for line in result_block:
+                            if line and len(line) >= 2 and isinstance(line[1], list) and len(line[1]) >= 2:
+                                text = line[1][0]
+                                confidence = line[1][1]
+                                if confidence > 0.4 and text.strip():  
+                                    page_text += text + " "
+                        page_text += "\n"
+                    
+                    elif isinstance(result_block, dict):
+                        if 'rec_texts' in result_block and 'rec_scores' in result_block:
+                            texts = result_block['rec_texts']
+                            scores = result_block['rec_scores']
+                            for text, score in zip(texts, scores):
+                                if score > 0.3 and text.strip():
+                                    page_text += text + " "
+                            page_text += "\n"
+                        elif 'text' in result_block:
+                            page_text += result_block['text'] + " "
+            
+            elif isinstance(ocr_result, dict):
+                if 'rec_texts' in ocr_result and 'rec_scores' in ocr_result:
+                    texts = ocr_result['rec_texts']
+                    scores = ocr_result['rec_scores']
+                    for text, score in zip(texts, scores):
+                        if score > 0.3 and text.strip():
+                            page_text += text + " "
+                    page_text += "\n"
+                    
+        except Exception as e:
+            print(f"Error processing OCR result: {e}")
+            
+        return page_text
 
-    def extract_text(self, file_content: bytes, force_ocr: bool = True) -> Tuple[str, int]:
-        """Combine PDF text extraction and OCR - always OCR by default"""
+    def extract_text(self, file_content: bytes, force_ocr: bool = False) -> Tuple[str, int]:
+        """Smart text extraction - OCR only when necessary"""
         try:
             pdf_text, num_pages = self.extract_text_from_pdf(file_content)
             print(f"[PDF] Extracted {len(pdf_text)} characters from {num_pages} pages")
@@ -290,16 +369,23 @@ class PDFProcessor:
             print(f"[PDF] Text extraction failed: {e}")
             pdf_text, num_pages = "", 0
 
+        has_images = self.pdf_has_images(file_content)
+        
+        ocr_decision = self.should_use_ocr(pdf_text, num_pages, has_images, force_ocr)
+        print(f"[DECISION] OCR needed: {ocr_decision['use_ocr']}, Reason: {ocr_decision['reason']}")
+
         ocr_text = ""
-        if force_ocr:
-            print("[OCR] Starting OCR extraction (forced)...")
+        if ocr_decision['use_ocr']:
+            print("[OCR] Starting OCR extraction...")
             try:
                 ocr_text = self.extract_text_with_ocr(file_content)
                 print(f"[OCR] Extracted {len(ocr_text)} characters")
             except Exception as e:
                 print(f"[OCR] OCR extraction failed: {e}")
+        else:
+            print("[OCR] Skipping OCR - not needed")
 
-        if len(ocr_text) > len(pdf_text) * 1.5: 
+        if ocr_text and len(ocr_text) > len(pdf_text) * 1.5: 
             combined_text = ocr_text
             print("[COMBINED] Using OCR text as primary")
         elif pdf_text and ocr_text:  
@@ -314,7 +400,7 @@ class PDFProcessor:
         else:
             raise HTTPException(
                 status_code=400,
-                detail="PDF contains no extractable text even after OCR"
+                detail="PDF contains no extractable text"
             )
 
         combined_text = combined_text.strip()
