@@ -10,6 +10,8 @@ ENV SSL_CERT_FILE=/etc/ca-bundle.crt
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --default-timeout=2000 --no-cache-dir \
     torch==2.0.1+cpu \
     torchvision==0.15.2+cpu \

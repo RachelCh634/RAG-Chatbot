@@ -7,7 +7,7 @@ services:
     container_name: rag-bot-app
     ports:
       - "8000:8000"    # FastAPI
-      - "8501:8501"    # Streamlit
+      - "8502:8501"    # Streamlit
     env_file:
       - .env
     volumes:
