@@ -4,7 +4,7 @@ import requests
 from streamlit_autorefresh import st_autorefresh
 
 def get_bot_response_from_api(user_message):
-    # Get response from API endpoint
+    """Get response from API endpoint"""
     api_url = "http://localhost:8000/chat"
     try:
         payload = {"query": user_message}
@@ -22,7 +22,7 @@ def get_bot_response_from_api(user_message):
         return f"Unexpected error: {str(e)[:100]}"
 
 def configure_page():
-    # Set up page configuration
+    """Set up page configuration"""
     try:
         st.set_page_config(
             page_title="RAG Chatbot",
@@ -34,7 +34,7 @@ def configure_page():
         pass
 
 def apply_custom_css():
-    # Apply custom CSS styling
+    """Apply custom CSS styling"""
     st.markdown("""
     <style>
         .main {
@@ -183,7 +183,7 @@ def apply_custom_css():
     """, unsafe_allow_html=True)
 
 def initialize_session_state():
-    # Initialize session state variables
+    """Initialize session state variables"""
     defaults = {
         "messages": [],
         "chat_history": [],
@@ -201,7 +201,7 @@ def initialize_session_state():
             st.session_state[key] = value
 
 def safe_api_call(func, error_message="Operation failed"):
-    # Safely execute API calls with error handling
+    """Safely execute API calls with error handling"""
     try:
         return func()
     except requests.exceptions.ConnectionError:
@@ -215,7 +215,7 @@ def safe_api_call(func, error_message="Operation failed"):
         return None
 
 def render_sidebar():
-    # Render sidebar controls
+    """Render sidebar controls"""
     with st.sidebar:
         st.markdown("<div class='sidebar-content'>", unsafe_allow_html=True)
         st.header("⚙️ Controls")
@@ -293,7 +293,7 @@ def render_sidebar():
                 st.rerun()
 
 def display_history_modal():
-    # Display conversation history modal
+    """Display conversation history modal"""
     if not st.session_state.get("show_history_modal", False):
         return
         
@@ -387,7 +387,7 @@ def display_history_modal():
             """, unsafe_allow_html=True)
 
 def handle_pdf_upload():
-    # Handle PDF file upload
+    """Handle PDF file upload"""
     uploaded_file = st.file_uploader(
         "Choose a PDF file",
         type="pdf",
@@ -461,7 +461,7 @@ def handle_pdf_upload():
             st.error(f" Upload failed: {str(e)}")
 
 def display_pdf_info():
-    # Display current PDF information
+    """Display current PDF information"""
     st.markdown(f"""
     <div class="pdf-info">
         <strong>📄 Current Document:</strong> {st.session_state.pdf_filename}<br>
@@ -470,7 +470,7 @@ def display_pdf_info():
     """, unsafe_allow_html=True)
 
 def display_welcome_message():
-    # Display welcome message for new chat
+    """Display welcome message for new chat"""
     st.markdown(f"""
     <div class="welcome-message">
         <h3>Hello! I'm ready to help you with your document</h3>
@@ -480,7 +480,7 @@ def display_welcome_message():
     """, unsafe_allow_html=True)
 
 def display_chat_messages():
-    # Display chat conversation messages exactly like history
+    """Display chat conversation messages exactly like history"""
     chat_container = st.container()
     with chat_container:
         for i, message in enumerate(st.session_state.messages):
@@ -526,7 +526,7 @@ def display_chat_messages():
                 """, unsafe_allow_html=True)
 
 def handle_user_input():
-    # Handle user input and send button
+    """Handle user input and send button"""
     st.markdown('<div class="input-container">', unsafe_allow_html=True)
     
     col1, col2 = st.columns([5, 1])
@@ -552,7 +552,7 @@ def handle_user_input():
     return user_input, send_button
 
 def process_message(user_input):
-    # Process user message and add to conversation
+    """Process user message and add to conversation"""
     if not user_input or not user_input.strip():
         return
         
@@ -568,7 +568,7 @@ def process_message(user_input):
     st.rerun()
 
 def get_bot_response_and_update():
-    # Get bot response and update conversation
+    """Get bot response and update conversation"""
     if not st.session_state.processing_message or not st.session_state.messages:
         return
         
@@ -598,7 +598,7 @@ def get_bot_response_and_update():
     st.rerun()
 
 def render_footer():
-    # Render page footer
+    """Render page footer"""
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #6b7280; font-size: 0.9rem; padding: 1rem;'>
@@ -622,7 +622,7 @@ def main():
         st_autorefresh(interval=3000, key="server_check")
         st.stop()
                    
-    # Main application function
+    """Main application function"""
     configure_page()
     apply_custom_css()
     initialize_session_state()
