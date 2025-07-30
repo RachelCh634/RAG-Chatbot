@@ -3,7 +3,7 @@ from models import ChatRequest, ChatResponse
 from pdf_processor import PDFProcessor
 from vector_service import VectorService
 from ai_service import AIService  
-from door_schedule_parser import parse_door_schedule_enhanced, create_enhanced_door_embeddings_text
+from door_schedule_parser import parse_doors_dynamic
 
 app = FastAPI(title="PDF RAG API", description="API for PDF processing and Q&A")
 
@@ -15,29 +15,53 @@ server_ready = True
 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Uploading PDF to Vector Database"""
+    """Uploading PDF to Vector Database with improved table extraction"""
     try:
         file_content = await file.read()
         pdf_processor.validate_file(file.filename, file_content)
-        full_text, num_pages = pdf_processor.extract_text(file_content)
-        print(full_text)
+        
+        # שימוש בשיטה המשופרת
+        full_text, extracted_tables = pdf_processor.extract_text_and_tables(file_content, force_ocr=True)
+        
+        print(f"Extracted text length: {len(full_text)}")
+        print(f"Number of tables found: {len(extracted_tables)}")
+        
+        # הדפסת מידע על הטבלאות
+        for i, table in enumerate(extracted_tables):
+            print(f"Table {i+1}: {table.shape[0]} rows × {table.shape[1]} columns")
+        
         if isinstance(full_text, list):
             full_text = " ".join(full_text)
         elif full_text is None:
             full_text = ""
         
-        door_result = parse_door_schedule_enhanced(full_text)
+        # פרסור דלתות
+        door_result = parse_doors_dynamic(full_text)  
         doors = door_result.get("doors", [])
         door_summary = door_result.get("summary", {})
+        print(f"Found {len(doors)} doors")
+        print(f"Total cost: {door_summary.get('total_cost', 0)}")
         
+        # הכנת טקסט מורחב עם דלתות
         if doors:
-            door_embeddings = create_enhanced_door_embeddings_text(doors)
-            combined_text = full_text + "\n\n" + "\n".join(door_embeddings)
+            door_texts = [f"Door {d['id']}: {d['size']} {d['material']} {d['operation']}" for d in doors]
+            combined_text = full_text + "\n\n" + "\n".join(door_texts)
         else:
             combined_text = full_text
-            door_embeddings = []
         
+        # שמירה ב-vector database
         result = vector_service.store_vectors(file.filename, combined_text)
+        
+        # הכנת תקציר טבלאות למענה
+        tables_summary = []
+        for i, table in enumerate(extracted_tables):
+            tables_summary.append({
+                "table_id": i + 1,
+                "rows": table.shape[0],
+                "columns": table.shape[1],
+                "column_names": list(table.columns)[:5],  # רק 5 הראשונות
+                "preview": table.head(3).to_dict('records') if not table.empty else []
+            })
         
         return {
             "status": "success",
@@ -48,17 +72,15 @@ async def upload_pdf(file: UploadFile = File(...)):
             "upload_success": result.get("upload_success", True),
             "doors_found": len(doors),
             "door_summary": door_summary,
-            "doors": doors[:5] if doors else [],  
-            "enhanced_pricing": door_result.get("enhanced_pricing", False),
-            "pricing_sources": door_summary.get("pricing_sources", {}) 
+            "doors": doors[:5] if doors else [],
+            "tables_found": len(extracted_tables),
+            "tables_summary": tables_summary[:3] 
         }
-        
     except HTTPException:
         raise
     except Exception as e:
         print(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_with_context(request: ChatRequest):
