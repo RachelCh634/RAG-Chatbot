@@ -422,7 +422,7 @@ def handle_pdf_upload():
             response = requests.post(
                 "http://localhost:8000/upload-pdf", 
                 files=files,
-                timeout=600 
+                timeout=1000
             )
             
             if response.status_code == 400:
