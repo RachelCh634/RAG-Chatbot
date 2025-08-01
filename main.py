@@ -3,7 +3,9 @@ from models import ChatRequest, ChatResponse
 from pdf_processor import PDFProcessor
 from vector_service import VectorService
 from ai_service import AIService  
-from door_schedule_parser import extract_door_schedule
+from door_schedule_parser import  TavilyPriceSearcher, extract_door_schedule_json, calculate_costs_and_augment 
+import json
+
 app = FastAPI(title="PDF RAG API", description="API for PDF processing and Q&A")
 
 server_ready = False
@@ -24,12 +26,20 @@ async def upload_pdf(file: UploadFile = File(...)):
             full_text = " ".join(full_text)
         elif full_text is None:
             full_text = ""
+
+        doors_json = extract_door_schedule_json(full_text)
+        if not doors_json:
+            door_result = []
+        else:
+            searcher = TavilyPriceSearcher()
+            doors_with_costs = calculate_costs_and_augment(doors_json, searcher)
+            door_result = doors_with_costs
         
-        door_result = extract_door_schedule(full_text)
-        print(f"Extracted door schedule: {door_result}")
-        
-        result = vector_service.store_vectors(file.filename, door_result)
-        
+        door_result_json_str = json.dumps(door_result, ensure_ascii=False, indent=2)
+        print(f"Extracted door schedule with costs: {door_result_json_str}")
+
+        result = vector_service.store_vectors(file.filename, door_result_json_str)
+
         return {
             "status": "success",
             "message": f"Successfully uploaded {file.filename}",
@@ -37,6 +47,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             "chunks_stored": result.get("chunks_stored", 0),
             "total_vectors": result.get("total_vectors", 0),
             "upload_success": result.get("upload_success", True),
+            "door_schedule": door_result_json_str
         }
         
     except HTTPException:
