@@ -68,6 +68,14 @@ docker-compose up --build
 
 ---
 
+## 🧪 Running Tests
+
+To run the automated unit and integration tests:
+
+```bash
+python -B -m pytest tests/
+```
+
 ## Troubleshooting
 
 | Problem                          | Solution                              |

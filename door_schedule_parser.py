@@ -3,6 +3,7 @@ import re
 import requests
 import json
 from datetime import datetime
+from tavily import TavilyClient
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,7 +17,6 @@ def calculate_area_sqm(width_cm: float, height_cm: float) -> float:
 
 class TavilyPriceSearcher:
     def __init__(self, region: str = "usa"):
-        from tavily import TavilyClient
         self.api_key = TAVILY_API_KEY
         self.client = TavilyClient(api_key=self.api_key)
         self.region = region
