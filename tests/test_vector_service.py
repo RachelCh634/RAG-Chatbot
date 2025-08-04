@@ -22,7 +22,7 @@ class TestVectorService:
         mock_tokenizer.return_value = Mock()
         
         with patch.object(mock_model, 'encode_text') as mock_encode:
-            mock_encode.return_value = torch.randn(1, 512)  # טנסור אמיתי
+            mock_encode.return_value = torch.randn(1, 512) 
             
             try:
                 service = VectorService()
